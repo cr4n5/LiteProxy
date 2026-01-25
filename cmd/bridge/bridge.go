@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	ClientControlAddr = "0.0.0.0:10020"
-	ServerControlAddr = "0.0.0.0:10021"
+	clientCtrlAddr = "0.0.0.0:10020"
+	serverCtrlAddr = "0.0.0.0:10021"
 )
 
 type Bridge struct {
-	mu      sync.Mutex
-	clients map[string]*yamux.Session // client_id -> client yamux session
-	servers map[string]*yamux.Session // client_id -> server yamux session
+	mu      sync.RWMutex
+	clients map[string]*yamux.Session
+	servers map[string]*yamux.Session
 }
 
 func NewBridge() *Bridge {
@@ -31,148 +31,199 @@ func NewBridge() *Bridge {
 }
 
 func (b *Bridge) Start() {
-	go b.listenClientControl()
-	go b.listenServerControl()
+	go b.acceptClients()
+	go b.acceptServers()
 	select {}
 }
 
-func (b *Bridge) listenClientControl() {
-	ln, err := net.Listen("tcp", ClientControlAddr)
+func (b *Bridge) acceptClients() {
+	ln, err := net.Listen("tcp", clientCtrlAddr)
 	if err != nil {
-		log.Fatalf("client control listen %v", err)
+		log.Fatalf("listen client control error: %v", err)
 	}
-	log.Printf("client control listening %s", ClientControlAddr)
+	defer ln.Close()
+	log.Printf("client control listening on %s", clientCtrlAddr)
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("client control accept: %v", err)
+			log.Printf("accept client error: %v", err)
 			continue
 		}
-		go b.handleClientControl(conn)
+		go b.handleClient(conn)
 	}
 }
 
-func (b *Bridge) listenServerControl() {
-	ln, err := net.Listen("tcp", ServerControlAddr)
+func (b *Bridge) acceptServers() {
+	ln, err := net.Listen("tcp", serverCtrlAddr)
 	if err != nil {
-		log.Fatalf("server control listen %v", err)
+		log.Fatalf("listen server control error: %v", err)
 	}
-	log.Printf("server control listening %s", ServerControlAddr)
+	defer ln.Close()
+	log.Printf("server control listening on %s", serverCtrlAddr)
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("server control accept: %v", err)
+			log.Printf("accept server error: %v", err)
 			continue
 		}
-		go b.handleServerControl(conn)
+		go b.handleServer(conn)
 	}
 }
 
-func (b *Bridge) handleClientControl(conn net.Conn) {
+func (b *Bridge) handleClient(conn net.Conn) {
 	defer conn.Close()
+
 	r := bufio.NewReader(conn)
 	line, err := r.ReadString('\n')
 	if err != nil {
+		log.Printf("read register command error: %v", err)
 		return
 	}
+
 	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "REGISTER ") {
-		id := strings.TrimSpace(strings.TrimPrefix(line, "REGISTER "))
-		session, err := yamux.Server(conn, nil)
-		if err != nil {
-			log.Printf("yamux session err: %v", err)
-			return
-		}
-		b.mu.Lock()
-		b.clients[id] = session
-		b.mu.Unlock()
-		log.Printf("client registered: %s", id)
-		<-session.CloseChan()
-		b.mu.Lock()
-		delete(b.clients, id)
-		b.mu.Unlock()
-		log.Printf("client disconnected: %s", id)
+	if !strings.HasPrefix(line, "REGISTER ") {
+		log.Printf("invalid client command: %s", line)
 		return
 	}
+
+	clientID := strings.TrimSpace(strings.TrimPrefix(line, "REGISTER "))
+
+	session, err := yamux.Server(conn, nil)
+	if err != nil {
+		log.Printf("yamux server error: %v", err)
+		return
+	}
+
+	b.mu.Lock()
+	b.clients[clientID] = session
+	b.mu.Unlock()
+	log.Printf("client registered: %s", clientID)
+
+	<-session.CloseChan()
+
+	b.mu.Lock()
+	delete(b.clients, clientID)
+	b.mu.Unlock()
+	log.Printf("client disconnected: %s", clientID)
 }
 
-func (b *Bridge) handleServerControl(conn net.Conn) {
+func (b *Bridge) handleServer(conn net.Conn) {
 	defer conn.Close()
+
 	r := bufio.NewReader(conn)
 	line, err := r.ReadString('\n')
 	if err != nil {
+		log.Printf("read forward command error: %v", err)
 		return
 	}
+
 	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "FORWARD ") {
-		// format: FORWARD <client_id> <target_host> <target_port>
-		parts := strings.SplitN(line, " ", 4)
-		if len(parts) < 4 {
-			fmt.Fprintln(conn, "ERR bad FORWARD")
-			return
-		}
-		clientID := parts[1]
-		targetHost := parts[2]
-		targetPort := parts[3]
-		session, err := yamux.Server(conn, nil)
+	if !strings.HasPrefix(line, "FORWARD ") {
+		fmt.Fprintln(conn, "ERR invalid command")
+		return
+	}
+
+	parts := strings.SplitN(line, " ", 4)
+	if len(parts) < 4 {
+		fmt.Fprintln(conn, "ERR invalid format")
+		return
+	}
+
+	clientID := parts[1]
+	targetHost := parts[2]
+	targetPort := parts[3]
+
+	session, err := yamux.Server(conn, nil)
+	if err != nil {
+		fmt.Fprintln(conn, "ERR yamux error")
+		log.Printf("yamux server error: %v", err)
+		return
+	}
+
+	b.mu.Lock()
+	b.servers[clientID] = session
+	clientSession, ok := b.clients[clientID]
+	b.mu.Unlock()
+
+	if !ok {
+		fmt.Fprintln(conn, "ERR no such client")
+		b.mu.Lock()
+		delete(b.servers, clientID)
+		b.mu.Unlock()
+		log.Printf("forward failed: client %s not found", clientID)
+		return
+	}
+
+	fmt.Fprintln(conn, "OK")
+	log.Printf("forward registered for client %s -> %s:%s", clientID, targetHost, targetPort)
+
+	go b.forwardLoop(clientID, clientSession, session, targetHost, targetPort)
+}
+
+func (b *Bridge) forwardLoop(clientID string, clientSession, serverSession *yamux.Session, targetHost, targetPort string) {
+	defer func() {
+		serverSession.Close()
+		b.mu.Lock()
+		delete(b.servers, clientID)
+		b.mu.Unlock()
+		log.Printf("server disconnected: %s", clientID)
+	}()
+
+	for {
+		srvStream, err := serverSession.AcceptStream()
 		if err != nil {
-			fmt.Fprintln(conn, "ERR yamux server")
+			log.Printf("accept server stream error: %v", err)
 			return
 		}
-		b.mu.Lock()
-		b.servers[clientID] = session
-		b.mu.Unlock()
-		b.mu.Lock()
-		clientSession, ok := b.clients[clientID]
-		b.mu.Unlock()
-		if !ok {
-			fmt.Fprintln(conn, "ERR no such client")
-			return
-		}
-		fmt.Fprintln(conn, "OK")
-		go func() {
-			for {
-				srvStream, err := session.AcceptStream()
-				if err != nil {
-					log.Printf("server AcceptStream err: %v", err)
-					break
-				}
-				clientStream, err := clientSession.OpenStream()
-				if err != nil {
-					log.Printf("open stream to client err: %v", err)
-					srvStream.Close()
-					continue
-				}
-				fmt.Fprintf(clientStream, "CONNECT %s %s\n", targetHost, targetPort)
-				go b.handleForward(clientStream, srvStream)
+
+		go func(srvStream net.Conn) {
+			defer srvStream.Close()
+
+			b.mu.RLock()
+			clientSession := b.clients[clientID]
+			b.mu.RUnlock()
+
+			if clientSession == nil {
+				log.Printf("client %s not available", clientID)
+				return
 			}
-			session.Close()
-			b.mu.Lock()
-			delete(b.servers, clientID)
-			b.mu.Unlock()
-			log.Printf("server disconnected: %s", clientID)
-		}()
-		<-session.CloseChan() // 阻塞直到session关闭
-		return
+
+			clientStream, err := clientSession.OpenStream()
+			if err != nil {
+				log.Printf("open client stream error: %v", err)
+				return
+			}
+
+			fmt.Fprintf(clientStream, "CONNECT %s %s\n", targetHost, targetPort)
+			b.relay(clientStream, srvStream)
+		}(srvStream)
 	}
 }
 
-// 处理 server 端的转发连接
-func (b *Bridge) handleForward(clientStream net.Conn, srvStream net.Conn) {
-	defer srvStream.Close()
+func (b *Bridge) relay(clientStream, serverStream net.Conn) {
 	defer clientStream.Close()
-	wg := sync.WaitGroup{}
-	wg.Add(2)
+	defer serverStream.Close()
+
+	errChan := make(chan error, 2)
+
 	go func() {
-		io.Copy(srvStream, clientStream)
-		wg.Done()
+		_, err := io.Copy(serverStream, clientStream)
+		errChan <- err
 	}()
+
 	go func() {
-		io.Copy(clientStream, srvStream)
-		wg.Done()
+		_, err := io.Copy(clientStream, serverStream)
+		errChan <- err
 	}()
-	wg.Wait()
-	log.Printf("forward session closed")
+
+	// Wait for first error or both goroutines to complete
+	for i := 0; i < 2; i++ {
+		if err := <-errChan; err != nil && err != io.EOF {
+			log.Printf("relay error: %v", err)
+		}
+	}
 }
 
 func main() {

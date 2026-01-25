@@ -7,62 +7,128 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/yamux"
 )
 
 var (
-	bridgeCtl  = flag.String("bridge", "127.0.0.1:10021", "bridge control addr (for server, yamux多路复用)")
-	listenAddr = flag.String("listen", ":8080", "listen addr for external incoming")
-	clientID   = flag.String("client", "client1", "target client id")
-	targetHost = flag.String("target", "127.0.0.1", "internal target host (for client)")
-	targetPort = flag.String("tport", "80", "internal target port (for client)")
+	bridgeAddr = flag.String("bridge", "127.0.0.1:10021", "bridge control address")
+	listenAddr = flag.String("listen", ":8080", "listen address for external connections")
+	clientID   = flag.String("client", "client1", "target client ID")
+	targetHost = flag.String("target", "127.0.0.1", "internal target host")
+	targetPort = flag.String("tport", "80", "internal target port")
 )
 
 func main() {
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	ctl, err := net.Dial("tcp", *bridgeCtl)
-	if err != nil {
-		log.Fatalf("dial bridge control: %v", err)
-	}
-	// 发送 FORWARD 命令
-	fmt.Fprintf(ctl, "FORWARD %s %s %s\n", *clientID, *targetHost, *targetPort)
-	r := bufio.NewReader(ctl)
-	ok, _ := r.ReadString('\n')
-	if ok == "" {
-		log.Fatalf("no ack from bridge")
-	}
-	session, err := yamux.Client(ctl, nil)
-	if err != nil {
-		log.Fatalf("yamux client: %v", err)
-	}
+
 	ln, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		log.Fatalf("listen error: %v", err)
 	}
-	log.Printf("listening %s", *listenAddr)
+	defer ln.Close()
+	log.Printf("listening on %s", *listenAddr)
+
+	go acceptLoop(ln)
+
+	select {}
+}
+
+func acceptLoop(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("accept: %v", err)
+			log.Printf("accept error: %v", err)
 			continue
 		}
-		go handleExternal(conn, session)
+
+		go func(c net.Conn) {
+			defer c.Close()
+			if err := handleClient(c); err != nil {
+				log.Printf("handle client error: %v", err)
+			}
+		}(conn)
 	}
 }
 
-func handleExternal(ext net.Conn, session *yamux.Session) {
-	defer ext.Close()
+func handleClient(c net.Conn) error {
+	session, err := connectBridge()
+	if err != nil {
+		return fmt.Errorf("connect bridge: %w", err)
+	}
+	defer session.Close()
+
 	stream, err := session.OpenStream()
 	if err != nil {
-		log.Printf("open stream: %v", err)
-		return
+		return fmt.Errorf("open stream: %w", err)
 	}
 	defer stream.Close()
+
+	log.Printf("accepted connection from %s, forwarding to bridge", c.RemoteAddr())
+
+	errChan := make(chan error, 2)
 	go func() {
-		io.Copy(stream, ext)
+		_, err := io.Copy(stream, c)
+		errChan <- err
 	}()
-	io.Copy(ext, stream)
-	log.Printf("external session closed")
+	go func() {
+		_, err := io.Copy(c, stream)
+		errChan <- err
+	}()
+
+	// Wait for first error or both goroutines to complete
+	for i := 0; i < 2; i++ {
+		if err := <-errChan; err != nil && err != io.EOF {
+			log.Printf("copy error: %v", err)
+		}
+	}
+
+	log.Printf("connection closed from %s", c.RemoteAddr())
+	return nil
+}
+
+func connectBridge() (*yamux.Session, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		ctl, err := net.Dial("tcp", *bridgeAddr)
+		if err != nil {
+			lastErr = err
+			log.Printf("dial bridge (attempt %d): %v, retrying in 2s...", attempt, err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Send FORWARD command
+		fmt.Fprintf(ctl, "FORWARD %s %s %s\n", *clientID, *targetHost, *targetPort)
+
+		r := bufio.NewReader(ctl)
+		ack, err := r.ReadString('\n')
+		if err != nil {
+			ctl.Close()
+			log.Printf("read ack: %v", err)
+			continue
+		}
+
+		ack = strings.TrimSpace(ack)
+		if !strings.HasPrefix(ack, "OK") {
+			ctl.Close()
+			log.Printf("bridge responded: %s", ack)
+			continue
+		}
+
+		session, err := yamux.Client(ctl, nil)
+		if err != nil {
+			ctl.Close()
+			log.Printf("yamux client: %v", err)
+			continue
+		}
+
+		log.Printf("connected to bridge successfully")
+		return session, nil
+	}
+
+	return nil, fmt.Errorf("failed to connect bridge after 5 attempts: %w", lastErr)
 }
