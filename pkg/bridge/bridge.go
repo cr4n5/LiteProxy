@@ -7,6 +7,7 @@ import (
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
+	"github.com/cr4n5/liteproxy/lib"
 	"github.com/cr4n5/liteproxy/util"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
@@ -15,13 +16,13 @@ import (
 type Bridge struct {
 	mu      sync.RWMutex
 	clients map[string]*quic.Conn
-	cfg     *config.BridgeConfig
+	cfg     *config.Config
 }
 
 func NewBridge(cfg *config.Config) *Bridge {
 	return &Bridge{
 		clients: make(map[string]*quic.Conn),
-		cfg:     cfg.Bridge,
+		cfg:     cfg,
 	}
 }
 
@@ -54,8 +55,8 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 		return
 	}
 	buf := make([]byte, 1024)
-	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
-	n, err := stream.Read(buf)
+	n, err := lib.StreamRead(stream, buf, 0)
+	stream.Close()
 	if err != nil {
 		log.Errorf("Remote Addr %s: failed to read from stream: %v", conn.RemoteAddr().String(), err)
 		return
@@ -118,8 +119,7 @@ func (b *Bridge) handleServerStream(ctx context.Context, hm *common.HandshakeMes
 		log.Errorf("Server stream: failed to encode handshake message for client ID %s: %v", hm.ClientID, err)
 		return
 	}
-	clientStream.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, err = clientStream.Write(data)
+	_, err = lib.StreamWrite(clientStream, data, 0)
 	if err != nil {
 		log.Errorf("Server stream: failed to write handshake message to client ID %s: %v", hm.ClientID, err)
 		return

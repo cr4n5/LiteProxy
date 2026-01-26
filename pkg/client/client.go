@@ -8,45 +8,33 @@ import (
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/quic-go/quic-go"
+	log "github.com/sirupsen/logrus"
 )
 
 type Client struct {
-	cfg *config.ClientConfig
+	cfg *config.Config
 }
 
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		cfg: cfg.Client,
+		cfg: cfg,
 	}
 }
 
-func (c *Client) Start() {
-	// Implement client start logic here
+func (c *Client) Start(ctx context.Context) {
+	err := c.Run(ctx)
+	if err != nil {
+		log.Fatalf("client exited with error: %v", err)
+	}
 }
 
 func (c *Client) Run(ctx context.Context) error {
 	// connect to bridge and perform handshake
-	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	conn, err := quic.DialAddr(ctxTimeout, c.cfg.BridgeAddr, common.GenerateTLSConfig(), nil)
+	conn, err := common.HandshakeToBridge(ctx, c.cfg)
 	if err != nil {
 		return err
 	}
-	defer conn.CloseWithError(0, "closing session")
-	stream, err := conn.OpenStreamSync(ctxTimeout)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-	// Handle handshake
-	hm := common.NewHandshakeMessage("client", c.cfg.AccessKey, c.cfg.ClientID, "", "")
-	data, err := hm.Encode()
-	stream.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, err = stream.Write(data)
-	if err != nil {
-		return err
-	}
-
+	defer conn.CloseWithError(0, "closing connection")
 	for {
 		newStream, err := conn.AcceptStream(ctx)
 		if err != nil {
@@ -72,7 +60,7 @@ func (c *Client) handleBridgeStream(ctx context.Context, stream *quic.Stream) {
 	// Connect to target
 	switch hm.Type {
 	case "tcp":
-		targetConn, err := net.Dial("tcp", hm.Target)
+		_, err := net.Dial("tcp", hm.Target)
 		if err != nil {
 			stream.CancelRead(common.ErrAccessDenied)
 			return

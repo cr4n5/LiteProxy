@@ -61,6 +61,13 @@ eXD8EjtVzhPE15ppAw==
 	}
 }
 
+func GenerateClientTLSConfig() *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"liteproxy-quic"},
+	}
+}
+
 const (
 	ErrClientNotFound quic.StreamErrorCode = 1001
 	ErrAccessDenied   quic.StreamErrorCode = 1002

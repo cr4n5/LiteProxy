@@ -10,6 +10,7 @@ func Init(level string) {
 	log.SetFormatter(&log.TextFormatter{
 		FullTimestamp: true,
 	})
+	log.SetReportCaller(true)
 	lvl, err := log.ParseLevel(strings.ToLower(level))
 	if err != nil {
 		lvl = log.InfoLevel
