@@ -3,12 +3,10 @@ package bridge
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/cr4n5/liteproxy/lib"
-	"github.com/cr4n5/liteproxy/util"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
 )
@@ -27,7 +25,7 @@ func NewBridge(cfg *config.Config) *Bridge {
 }
 
 func (b *Bridge) Start(ctx context.Context) {
-	ln, err := quic.ListenAddr(b.cfg.BridgeAddr, common.GenerateTLSConfig(), nil)
+	ln, err := quic.ListenAddr(b.cfg.BridgeAddr, common.GenerateTLSConfig(), common.QuicConfig)
 	if err != nil {
 		log.Fatalf("failed to start bridge listener: %v", err)
 		return
@@ -47,9 +45,7 @@ func (b *Bridge) Start(ctx context.Context) {
 func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 	defer conn.CloseWithError(0, "closing connection")
 	// Handle handshake
-	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	stream, err := conn.AcceptStream(ctxTimeout)
+	stream, err := lib.StreamAccept(ctx, conn, 0)
 	if err != nil {
 		log.Errorf("Remote Addr %s: failed to accept stream: %v", conn.RemoteAddr().String(), err)
 		return
@@ -61,7 +57,7 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 		log.Errorf("Remote Addr %s: failed to read from stream: %v", conn.RemoteAddr().String(), err)
 		return
 	}
-	hm, err := common.DecodeHandshakeMessage(buf[:n])
+	hm, err := lib.DecodeHandshakeMessage(buf[:n])
 	if err != nil {
 		log.Errorf("Remote Addr %s: failed to decode handshake message: %v", conn.RemoteAddr().String(), err)
 		return
@@ -84,6 +80,12 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 			go b.handleServerStream(ctx, hm, newStream)
 		}
 	case "client":
+		_, ok := b.GetClient(hm.ClientID)
+		if ok {
+			log.Errorf("Remote Addr %s: client ID %s already connected", conn.RemoteAddr().String(), hm.ClientID)
+			_ = conn.CloseWithError(0, "client ID already connected")
+			return
+		}
 		b.SetClient(hm.ClientID, conn)
 		log.Infof("Remote Addr %s: client ID %s connected", conn.RemoteAddr().String(), hm.ClientID)
 		// wait for disconnection
@@ -97,40 +99,43 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 	}
 }
 
-func (b *Bridge) handleServerStream(ctx context.Context, hm *common.HandshakeMessage, stream *quic.Stream) {
+func (b *Bridge) handleServerStream(ctx context.Context, hm *lib.HandshakeMessage, stream *quic.Stream) {
 	defer stream.Close()
 	clientConn, ok := b.GetClient(hm.ClientID)
 	if !ok {
 		log.Errorf("Server stream: client ID %s not connected", hm.ClientID)
-		stream.CancelRead(common.ErrClientNotFound)
+		stream.CancelWrite(common.ErrClientNotFound)
+		// lib.StreamWaitClosed(stream)
 		return
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	clientStream, err := clientConn.OpenStreamSync(timeoutCtx)
+	clientStream, err := lib.StreamOpen(ctx, clientConn, 0)
 	if err != nil {
 		log.Errorf("Server stream: failed to open stream to client ID %s: %v", hm.ClientID, err)
+		stream.CancelWrite(common.ErrClientNotFound)
 		return
 	}
 	defer clientStream.Close()
-	// handshake
+	// send hm data to client
 	data, err := hm.Encode()
 	if err != nil {
 		log.Errorf("Server stream: failed to encode handshake message for client ID %s: %v", hm.ClientID, err)
 		return
 	}
-	_, err = lib.StreamWrite(clientStream, data, 0)
+	_, err = lib.StreamWriteWithLength(clientStream, data, 0)
 	if err != nil {
-		log.Errorf("Server stream: failed to write handshake message to client ID %s: %v", hm.ClientID, err)
+		log.Errorf("Server stream: failed to write handshake message to client ID %s: %v", hm.ClientID, common.TranslateStreamError(err))
+		stream.CancelWrite(common.ErrClientNotFound)
 		return
 	}
 
 	// Start piping data between server stream and client stream
-	err = util.Pipe(stream, clientStream)
+	err = lib.Pipe(stream, clientStream)
 	if err != nil {
-		log.Errorf("Server stream: piping between server and client ID %s ended: %v", hm.ClientID, err)
+		log.Errorf("Server stream: piping between server and client ID %s ended: %v", hm.ClientID, common.TranslateStreamError(err))
+		stream.CancelWrite(common.TranslateErrorCode(err))
 		return
 	}
+	log.Infof("Server stream: piping between server and client ID %s ended normally", hm.ClientID)
 }
 
 func (b *Bridge) SetClient(id string, conn *quic.Conn) {

@@ -1,12 +1,10 @@
-package common
+package lib
 
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/cr4n5/liteproxy/config"
-	"github.com/cr4n5/liteproxy/lib"
 	"github.com/quic-go/quic-go"
 )
 
@@ -43,25 +41,22 @@ func DecodeHandshakeMessage(data []byte) (*HandshakeMessage, error) {
 
 func HandshakeToBridge(ctx context.Context, cfg *config.Config) (*quic.Conn, error) {
 	// connect to bridge and perform handshake
-	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	conn, err := quic.DialAddr(ctxTimeout, cfg.BridgeAddr, GenerateClientTLSConfig(), nil)
+	conn, err := QuicDialAddr(ctx, cfg.BridgeAddr, 0)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := conn.OpenStreamSync(ctxTimeout)
+	stream, err := StreamOpen(ctx, conn, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer stream.Close()
 	// Handle handshake
 	hm := NewHandshakeMessage(cfg)
 	data, err := hm.Encode()
-	_, err = lib.StreamWrite(stream, data, 0)
+	_, err = StreamWrite(stream, data, 0)
 	if err != nil {
 		return nil, err
 	}
 	// wait close
-	lib.StreamWaitClosed(stream)
+	StreamWaitClosed(stream)
 	return conn, nil
 }

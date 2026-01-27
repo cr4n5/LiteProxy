@@ -2,6 +2,9 @@ package common
 
 import (
 	"crypto/tls"
+	"errors"
+	"strings"
+	"time"
 
 	"github.com/quic-go/quic-go"
 )
@@ -68,7 +71,37 @@ func GenerateClientTLSConfig() *tls.Config {
 	}
 }
 
+var QuicConfig = &quic.Config{
+	KeepAlivePeriod:    10 * time.Second,
+	MaxIdleTimeout:     30 * time.Second,
+	MaxIncomingStreams: 100000,
+}
+
 const (
-	ErrClientNotFound quic.StreamErrorCode = 1001
-	ErrAccessDenied   quic.StreamErrorCode = 1002
+	ErrClientNotFound    quic.StreamErrorCode = 1001
+	ErrTargetUnreachable quic.StreamErrorCode = 1002
 )
+
+func TranslateStreamError(err error) error {
+	errStr := err.Error()
+	switch {
+	case strings.Contains(errStr, "error code 1001"):
+		return errors.New("target client is not connected")
+	case strings.Contains(errStr, "error code 1002"):
+		return errors.New("target is unreachable")
+	default:
+		return err
+	}
+}
+
+func TranslateErrorCode(err error) quic.StreamErrorCode {
+	errStr := err.Error()
+	switch {
+	case strings.Contains(errStr, "error code 1001"):
+		return ErrClientNotFound
+	case strings.Contains(errStr, "error code 1002"):
+		return ErrTargetUnreachable
+	default:
+		return 0
+	}
+}

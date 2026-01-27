@@ -58,8 +58,8 @@ func ParseArgs() {
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(serverCmd)
 		listenAddr := serverCmd.String("listen", "0.0.0.0:8080", "listen address for external connections")
 		clientID := serverCmd.String("id", "client1", "target client ID")
-		target := serverCmd.String("target", "127.0.0.1", "internal target host")
-		typeFlag := serverCmd.String("type", "", "server type")
+		target := serverCmd.String("target", "127.0.0.1:80", "internal target address")
+		typeFlag := serverCmd.String("type", "tcp", "server type")
 		serverCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy server [flags]")
 			serverCmd.PrintDefaults()
