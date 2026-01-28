@@ -12,8 +12,6 @@ type HandshakeMessage struct {
 	ClientType string `json:"client_type"`
 	AccessKey  string `json:"access_key"`
 	ClientID   string `json:"client_id"`
-	Type       string `json:"type,omitempty"`
-	Target     string `json:"target,omitempty"`
 }
 
 func NewHandshakeMessage(cfg *config.Config) *HandshakeMessage {
@@ -21,8 +19,6 @@ func NewHandshakeMessage(cfg *config.Config) *HandshakeMessage {
 		ClientType: cfg.Mode,
 		AccessKey:  cfg.AccessKey,
 		ClientID:   cfg.ClientID,
-		Type:       cfg.Type,
-		Target:     cfg.Target,
 	}
 }
 

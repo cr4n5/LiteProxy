@@ -6,7 +6,7 @@ import (
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
-	"github.com/cr4n5/liteproxy/lib"
+	"github.com/cr4n5/liteproxy/pkg/lib"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
 )
@@ -105,7 +105,6 @@ func (b *Bridge) handleServerStream(ctx context.Context, hm *lib.HandshakeMessag
 	if !ok {
 		log.Errorf("Server stream: client ID %s not connected", hm.ClientID)
 		stream.CancelWrite(common.ErrClientNotFound)
-		// lib.StreamWaitClosed(stream)
 		return
 	}
 	clientStream, err := lib.StreamOpen(ctx, clientConn, 0)
@@ -115,18 +114,6 @@ func (b *Bridge) handleServerStream(ctx context.Context, hm *lib.HandshakeMessag
 		return
 	}
 	defer clientStream.Close()
-	// send hm data to client
-	data, err := hm.Encode()
-	if err != nil {
-		log.Errorf("Server stream: failed to encode handshake message for client ID %s: %v", hm.ClientID, err)
-		return
-	}
-	_, err = lib.StreamWriteWithLength(clientStream, data, 0)
-	if err != nil {
-		log.Errorf("Server stream: failed to write handshake message to client ID %s: %v", hm.ClientID, common.TranslateStreamError(err))
-		stream.CancelWrite(common.ErrClientNotFound)
-		return
-	}
 
 	// Start piping data between server stream and client stream
 	err = lib.Pipe(stream, clientStream)

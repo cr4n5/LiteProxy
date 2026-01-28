@@ -7,7 +7,7 @@ import (
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
-	"github.com/cr4n5/liteproxy/lib"
+	"github.com/cr4n5/liteproxy/pkg/lib"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
 )
@@ -50,35 +50,35 @@ func (c *Client) Run(ctx context.Context) error {
 
 func (c *Client) handleBridgeStream(ctx context.Context, stream *quic.Stream) {
 	defer stream.Close()
-	// Handle handshake for new incoming stream
+	// Handle handconn message
 	data, err := lib.StreamReadWithLength(stream, 0)
 	if err != nil {
-		log.Errorf("failed to read handshake from bridge: %v", err)
+		log.Errorf("failed to read handconn message from server: %v", err)
 		return
 	}
-	hm, err := lib.DecodeHandshakeMessage(data)
+	hcm, err := lib.DecodeHandConnMessage(data)
 	if err != nil {
-		log.Errorf("failed to decode handshake from bridge: %v", err)
+		log.Errorf("failed to decode handconn message from server: %v", err)
 		return
 	}
 	// Connect to target
-	switch hm.Type {
+	switch hcm.Protocol {
 	case "tcp":
-		targetConn, err := net.Dial("tcp", hm.Target)
+		targetConn, err := net.Dial("tcp", hcm.ClientAddr)
 		if err != nil {
-			log.Errorf("failed to connect to target %s: %v", hm.Target, err)
+			log.Errorf("failed to connect to target %s: %v", hcm.ClientAddr, err)
 			stream.CancelWrite(common.ErrTargetUnreachable)
 			return
 		}
 		defer targetConn.Close()
-		log.Printf("connected to target %s for stream from bridge", hm.Target)
+		log.Printf("connected to target %s for stream from bridge", hcm.ClientAddr)
 		// Start piping data between stream and target connection
 		err = lib.Pipe(stream, targetConn)
 		if err != nil {
-			log.Errorf("piping between bridge and target %s ended: %v", hm.Target, common.TranslateStreamError(err))
+			log.Errorf("piping between bridge and target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
 			return
 		}
-		log.Printf("piping between bridge and target %s ended normally", hm.Target)
+		log.Printf("piping between bridge and target %s ended normally", hcm.ClientAddr)
 	default:
 		// Unsupported type
 		// stream.CancelRead(common.ErrAccessDenied)
