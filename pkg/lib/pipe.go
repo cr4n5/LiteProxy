@@ -2,6 +2,9 @@ package lib
 
 import (
 	"io"
+	"net"
+
+	"github.com/quic-go/quic-go"
 )
 
 func Copy(src, dst io.ReadWriteCloser) error {
@@ -22,5 +25,48 @@ func Pipe(conn1, conn2 io.ReadWriteCloser) error {
 	go func() {
 		errCh <- Copy(conn2, conn1)
 	}()
+	return <-errCh
+}
+
+func PipeUDPStream(stream *quic.Stream, udpConn *net.UDPConn) error {
+	defer stream.Close()
+	defer udpConn.Close()
+	// Read UDP data from stream with length prefix and forward to target
+	// Also receive responses from target and send back via stream
+	errCh := make(chan error, 2)
+
+	// Stream to UDP
+	go func() {
+		for {
+			data, err := StreamReadWithLength(stream, 0)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			_, err = udpConn.Write(data)
+			if err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	// UDP to Stream
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, err := udpConn.Read(buf)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			_, err = StreamWriteWithLength(stream, buf[:n], 0)
+			if err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
 	return <-errCh
 }

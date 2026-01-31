@@ -85,16 +85,29 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			}
 			go s.handleTCPConnection(ctx, route, bridgeConn, conn)
 		}
-	// case "udp":
-	// ln, err := net.ListenPacket("udp", s.cfg.ListenAddr)
-	// if err != nil {
-	// 	return err
-	// }
-	// defer ln.Close()
-	// log.Infof("server listening on %s, forwarding to bridge", s.cfg.ListenAddr)
+	case "udp":
+		ln, err := net.ListenPacket("udp", route.LocalAddr)
+		if err != nil {
+			return err
+		}
+		defer ln.Close()
+		go func() {
+			<-ctx.Done()
+			ln.Close()
+		}()
+		log.Infof("server listening(UDP) on %s, forwarding to bridge", route.LocalAddr)
+		udpSession := lib.NewUDPSession(ln)
+		buf := make([]byte, 65535)
+		for {
+			n, addr, err := ln.ReadFrom(buf)
+			if err != nil {
+				return err
+			}
+			go s.handleUDPConnection(ctx, route, bridgeConn, addr, buf[:n], udpSession)
+		}
 	default:
-		// unsupported type
-		return errors.New("unsupported server type")
+		// unsupported protocol
+		return errors.New("unsupported protocol: " + route.Protocol)
 	}
 }
 
@@ -115,4 +128,20 @@ func (s *Server) handleTCPConnection(ctx context.Context, route config.RouteConf
 		return
 	}
 	log.Infof("connection from %s closed normally", conn.RemoteAddr())
+}
+
+func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConfig, bridgeConn *quic.Conn, addr net.Addr, data []byte, udpSession *lib.UDPSession) {
+	stream, err := udpSession.GetOrCreateStream(ctx, route, bridgeConn, addr)
+	if err != nil {
+		log.Errorf("failed to get or create stream for addr %s: %v", addr.String(), err)
+		return
+	}
+	// Use the stream to handle UDP data - use StreamWriteWithLength for proper framing
+	_, err = lib.StreamWriteWithLength(stream, data, 0)
+	if err != nil {
+		log.Errorf("failed to write UDP data to bridge for addr %s: %v", addr.String(), err)
+		udpSession.DeleteStream(addr)
+		return
+	}
+	log.Debugf("forwarded UDP data from %s to bridge", addr.String())
 }

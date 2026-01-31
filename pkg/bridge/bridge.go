@@ -80,13 +80,12 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 			go b.handleServerStream(ctx, hm, newStream)
 		}
 	case "client":
-		_, ok := b.GetClient(hm.ClientID)
-		if ok {
+		ok := b.SetClient(hm.ClientID, conn)
+		if !ok {
 			log.Errorf("Remote Addr %s: client ID %s already connected", conn.RemoteAddr().String(), hm.ClientID)
 			_ = conn.CloseWithError(0, "client ID already connected")
 			return
 		}
-		b.SetClient(hm.ClientID, conn)
 		log.Infof("Remote Addr %s: client ID %s connected", conn.RemoteAddr().String(), hm.ClientID)
 		// wait for disconnection
 		<-conn.Context().Done()
@@ -125,10 +124,14 @@ func (b *Bridge) handleServerStream(ctx context.Context, hm *lib.HandshakeMessag
 	log.Infof("Server stream: piping between server and client ID %s ended normally", hm.ClientID)
 }
 
-func (b *Bridge) SetClient(id string, conn *quic.Conn) {
+func (b *Bridge) SetClient(id string, conn *quic.Conn) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if _, ok := b.clients[id]; ok {
+		return false
+	}
 	b.clients[id] = conn
+	return true
 }
 
 func (b *Bridge) GetClient(id string) (*quic.Conn, bool) {

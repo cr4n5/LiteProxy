@@ -103,10 +103,7 @@ func StreamWriteWithLength(stream *quic.Stream, data []byte, timeout int) (int, 
 	// Write 4-byte length prefix
 	lengthBuf := make([]byte, 4)
 	binary.BigEndian.PutUint32(lengthBuf, uint32(len(data)))
-	_, err := stream.Write(lengthBuf)
-	if err != nil {
-		return 0, err
-	}
+	data = append(lengthBuf, data...)
 
 	// Write actual data
 	n, err := stream.Write(data)
