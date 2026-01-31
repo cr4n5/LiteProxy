@@ -38,6 +38,7 @@ func (c *Client) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	log.Infof("Attempting to connect to bridge at %s, log an error if it fails, otherwise it succeeded.", c.cfg.BridgeAddr)
 	defer conn.CloseWithError(0, "closing connection")
 	for {
 		newStream, err := conn.AcceptStream(ctx)
@@ -53,12 +54,12 @@ func (c *Client) handleBridgeStream(ctx context.Context, stream *quic.Stream) {
 	// Handle handconn message
 	data, err := lib.StreamReadWithLength(stream, 0)
 	if err != nil {
-		log.Errorf("failed to read handconn message from server: %v", err)
+		log.Errorf("failed to read handconn message: %v", err)
 		return
 	}
 	hcm, err := lib.DecodeHandConnMessage(data)
 	if err != nil {
-		log.Errorf("failed to decode handconn message from server: %v", err)
+		log.Errorf("failed to decode handconn message: %v", err)
 		return
 	}
 	// Connect to target
@@ -66,41 +67,41 @@ func (c *Client) handleBridgeStream(ctx context.Context, stream *quic.Stream) {
 	case "tcp":
 		targetConn, err := net.Dial("tcp", hcm.ClientAddr)
 		if err != nil {
-			log.Errorf("failed to connect to target %s: %v", hcm.ClientAddr, err)
+			log.Errorf("(TCP) failed to connect to target %s: %v", hcm.ClientAddr, err)
 			stream.CancelWrite(common.ErrTargetUnreachable)
 			return
 		}
 		defer targetConn.Close()
-		log.Infof("connected to target %s for stream from bridge", hcm.ClientAddr)
+		log.Infof("(TCP) connected to target %s ", hcm.ClientAddr)
 		// Start piping data between stream and target connection
 		err = lib.Pipe(stream, targetConn)
 		if err != nil {
-			log.Errorf("piping between bridge and target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
+			log.Errorf("(TCP) piping between stream and target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
 			return
 		}
-		log.Infof("piping between bridge and target %s ended normally", hcm.ClientAddr)
+		log.Infof("(TCP) piping between stream and target %s ended normally", hcm.ClientAddr)
 	case "udp":
 		udpAddr, err := net.ResolveUDPAddr("udp", hcm.ClientAddr)
 		if err != nil {
-			log.Errorf("failed to resolve UDP address %s: %v", hcm.ClientAddr, err)
+			log.Errorf("(UDP) failed to resolve UDP address %s: %v", hcm.ClientAddr, err)
 			stream.CancelWrite(common.ErrTargetUnreachable)
 			return
 		}
 		udpConn, err := net.DialUDP("udp", nil, udpAddr)
 		if err != nil {
-			log.Errorf("failed to connect to UDP target %s: %v", hcm.ClientAddr, err)
+			log.Errorf("(UDP) failed to connect to UDP target %s: %v", hcm.ClientAddr, err)
 			stream.CancelWrite(common.ErrTargetUnreachable)
 			return
 		}
 		defer udpConn.Close()
-		log.Infof("connected to UDP target %s for stream from bridge", hcm.ClientAddr)
+		log.Infof("(UDP) connected to UDP target %s ", hcm.ClientAddr)
 		// Handle UDP with proper length prefix protocol
 		err = lib.PipeUDPStream(stream, udpConn)
 		if err != nil {
-			log.Errorf("piping between bridge and UDP target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
+			log.Errorf("(UDP) piping between stream and UDP target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
 			return
 		}
-		log.Infof("piping between bridge and UDP target %s ended normally", hcm.ClientAddr)
+		log.Infof("(UDP) piping between stream and UDP target %s ended normally", hcm.ClientAddr)
 	default:
 		// Unsupported protocol
 		log.Errorf("unsupported protocol %s from handconn message", hcm.Protocol)

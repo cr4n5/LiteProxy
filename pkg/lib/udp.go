@@ -12,90 +12,88 @@ import (
 )
 
 type UDPSession struct {
-	mu       sync.RWMutex
-	creating sync.Map
 	ln       net.PacketConn
-	session  map[string]*quic.Stream
-	ping     map[string]chan struct{}
+	session  sync.Map
+	ping     sync.Map
+	creating sync.Map
 }
 
 func NewUDPSession(ln net.PacketConn) *UDPSession {
 	return &UDPSession{
-		ln:      ln,
-		session: make(map[string]*quic.Stream),
-		ping:    make(map[string]chan struct{}),
+		ln: ln,
 	}
 }
 
 func (u *UDPSession) GetOrCreateStream(ctx context.Context, route config.RouteConfig, bridgeConn *quic.Conn, addr net.Addr) (*quic.Stream, error) {
+	stream, ok := u.GetStream(addr)
+	if ok {
+		return stream.(*quic.Stream), nil
+	}
+
 	// creating sync.Map to prevent duplicate creations
 	actual, _ := u.creating.LoadOrStore(addr.String(), &sync.Mutex{})
 	mu := actual.(*sync.Mutex)
-
 	mu.Lock()
-	defer func() {
-		mu.Unlock()
-		u.creating.Delete(addr.String())
-	}()
+	defer mu.Unlock()
 
-	stream, ok := u.GetStream(addr)
+	stream, ok = u.GetStream(addr)
 	if ok {
-		return stream, nil
+		return stream.(*quic.Stream), nil
 	}
+
 	stream, err := HandConnToTarget(ctx, &route, bridgeConn)
 	if err != nil {
 		return nil, err
 	}
-	u.SetStream(addr, stream)
+	u.SetStream(addr, stream.(*quic.Stream), &route)
 
-	return stream, nil
+	return stream.(*quic.Stream), nil
 }
 
-func (u *UDPSession) GetStream(addr net.Addr) (*quic.Stream, bool) {
-	u.mu.RLock()
-	stream, ok := u.session[addr.String()]
-	u.mu.RUnlock()
+func (u *UDPSession) GetStream(addr net.Addr) (any, bool) {
+	stream, ok := u.session.Load(addr.String())
 	if ok {
-		// Reset timeout timer
-		select {
-		case u.ping[addr.String()] <- struct{}{}:
-		default:
+		pingCh, pingOk := u.ping.Load(addr.String())
+		if pingOk {
+			u.PingStream(pingCh)
 		}
 	}
 	return stream, ok
 }
 
-func (u *UDPSession) SetStream(addr net.Addr, stream *quic.Stream) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.session[addr.String()] = stream
-	u.ping[addr.String()] = make(chan struct{}, 1)
-	log.Infof("UDP stream created for %s", addr.String())
-	go u.TimeoutClose(addr)
-	go u.ForwardStreamData(addr, stream)
+func (u *UDPSession) SetStream(addr net.Addr, stream *quic.Stream, route *config.RouteConfig) {
+	u.session.Store(addr.String(), stream)
+	u.ping.Store(addr.String(), make(chan struct{}, 1))
+	log.Infof("(UDP) UDP stream created for %s with target %s", addr.String(), route.ClientAddr)
+	go u.TimeoutClose(addr, route)
+	go u.ForwardStreamData(addr, stream, route)
 }
 
 func (u *UDPSession) DeleteStream(addr net.Addr) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if stream, ok := u.session[addr.String()]; ok {
-		stream.Close()
+	if stream, ok := u.session.Load(addr.String()); ok {
+		stream.(*quic.Stream).Close()
 	}
-	delete(u.session, addr.String())
-	delete(u.ping, addr.String())
+	u.session.Delete(addr.String())
+	u.ping.Delete(addr.String())
+	u.creating.Delete(addr.String())
 }
 
 func (u *UDPSession) Close() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	for _, stream := range u.session {
-		stream.Close()
-	}
-	u.session = nil
-	u.ping = nil
+	u.session.Range(func(key, value any) bool {
+		value.(*quic.Stream).Close()
+		return true
+	})
+	u.session = sync.Map{}
+	u.ping = sync.Map{}
+	u.creating = sync.Map{}
 }
 
-func (u *UDPSession) ForwardStreamData(addr net.Addr, stream *quic.Stream) {
+func (u *UDPSession) ForwardStreamData(addr net.Addr, stream *quic.Stream, route *config.RouteConfig) {
+	pingCh, pingOk := u.ping.Load(addr.String())
+	if !pingOk {
+		log.Errorf("(UDP) ping channel for %s not found", addr.String())
+		return
+	}
 	for {
 		// Read data from QUIC stream with length prefix
 		data, err := StreamReadWithLength(stream, 0)
@@ -107,27 +105,36 @@ func (u *UDPSession) ForwardStreamData(addr net.Addr, stream *quic.Stream) {
 		if err != nil {
 			return
 		}
-		select {
-		case u.ping[addr.String()] <- struct{}{}:
-		default:
-		}
-
-		log.Debugf("UDP data forwarded to %s, %d bytes", addr.String(), len(data))
+		u.PingStream(pingCh)
+		log.Debugf("(UDP) UDP data forwarded from target %s to %s", route.ClientAddr, addr.String())
 	}
 }
 
-func (u *UDPSession) TimeoutClose(addr net.Addr) {
+func (u *UDPSession) TimeoutClose(addr net.Addr, route *config.RouteConfig) {
 	timer := time.NewTimer(1 * time.Minute)
 	defer timer.Stop()
 
+	pingCh, pingOk := u.ping.Load(addr.String())
+	if !pingOk {
+		log.Errorf("(UDP) ping channel for %s not found", addr.String())
+		return
+	}
 	for {
 		select {
 		case <-timer.C:
 			u.DeleteStream(addr)
-			log.Infof("UDP stream to %s timed out and closed", addr.String())
+			log.Infof("(UDP) UDP stream for %s with target %s closed due to inactivity", addr.String(), route.ClientAddr)
 			return
-		case <-u.ping[addr.String()]:
+		case <-pingCh.(chan struct{}):
 			timer.Reset(1 * time.Minute)
 		}
+	}
+}
+
+func (u *UDPSession) PingStream(pingCh any) {
+	// Reset timeout timer
+	select {
+	case pingCh.(chan struct{}) <- struct{}{}:
+	default:
 	}
 }

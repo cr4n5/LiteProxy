@@ -76,7 +76,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			<-ctx.Done()
 			ln.Close()
 		}()
-		log.Infof("server listening(TCP) on %s, forwarding to bridge", route.LocalAddr)
+		log.Infof("(TCP) server listening on %s", route.LocalAddr)
 
 		for {
 			conn, err := ln.Accept()
@@ -95,8 +95,9 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			<-ctx.Done()
 			ln.Close()
 		}()
-		log.Infof("server listening(UDP) on %s, forwarding to bridge", route.LocalAddr)
+		log.Infof("(UDP) server listening on %s", route.LocalAddr)
 		udpSession := lib.NewUDPSession(ln)
+		defer udpSession.Close()
 		buf := make([]byte, 65535)
 		for {
 			n, addr, err := ln.ReadFrom(buf)
@@ -112,36 +113,36 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 }
 
 func (s *Server) handleTCPConnection(ctx context.Context, route config.RouteConfig, bridgeConn *quic.Conn, conn net.Conn) {
+	log.Infof("(TCP) accepted connection from %s to target %s", conn.RemoteAddr(), route.ClientAddr)
 	defer conn.Close()
 	// Open new stream to bridge
 	stream, err := lib.HandConnToTarget(ctx, &route, bridgeConn)
 	if err != nil {
-		log.Errorf("failed to open stream to bridge: %v", err)
+		log.Errorf("(TCP) failed to open stream: %v", err)
 		return
 	}
 	defer stream.Close()
 
-	log.Infof("accepted connection from %s, forwarding to bridge", conn.RemoteAddr())
 	err = lib.Pipe(stream, conn)
 	if err != nil {
-		log.Errorf("pipe error: %v", common.TranslateStreamError(err))
+		log.Errorf("(TCP) pipe between %s and target %s ended: %v", conn.RemoteAddr(), route.ClientAddr, common.TranslateStreamError(err))
 		return
 	}
-	log.Infof("connection from %s closed normally", conn.RemoteAddr())
+	log.Infof("(TCP) pipe between %s and target %s ended normally", conn.RemoteAddr(), route.ClientAddr)
 }
 
 func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConfig, bridgeConn *quic.Conn, addr net.Addr, data []byte, udpSession *lib.UDPSession) {
 	stream, err := udpSession.GetOrCreateStream(ctx, route, bridgeConn, addr)
 	if err != nil {
-		log.Errorf("failed to get or create stream for addr %s: %v", addr.String(), err)
+		log.Errorf("(UDP) failed to get or create stream for addr %s to target %s: %v", addr.String(), route.ClientAddr, err)
 		return
 	}
 	// Use the stream to handle UDP data - use StreamWriteWithLength for proper framing
 	_, err = lib.StreamWriteWithLength(stream, data, 0)
 	if err != nil {
-		log.Errorf("failed to write UDP data to bridge for addr %s: %v", addr.String(), err)
+		log.Errorf("(UDP) failed to write UDP data for addr %s to target %s: %v", addr.String(), route.ClientAddr, err)
 		udpSession.DeleteStream(addr)
 		return
 	}
-	log.Debugf("forwarded UDP data from %s to bridge", addr.String())
+	log.Debugf("(UDP) UDP data forwarded from %s to target %s", addr.String(), route.ClientAddr)
 }
