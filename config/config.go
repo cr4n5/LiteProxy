@@ -25,6 +25,7 @@ type Config struct {
 	AccessKey  string
 	ClientID   string
 	Routes     []RouteConfig // route configuration list
+	StunServer string
 }
 
 var config *Config
@@ -32,7 +33,7 @@ var config *Config
 func registerCommonFlags(fs *flag.FlagSet) (*string, *string, *string) {
 	accessKey := fs.String("K", "", "access key for authentication")
 	bridgeAddr := fs.String("A", "127.0.0.1:10020", "bridge control address")
-	logLevel := fs.String("loglevel", "info", "logging level (trace, debug, info, warn, error)")
+	logLevel := fs.String("log", "info", "logging level (trace, debug, info, warn, error)")
 	return accessKey, bridgeAddr, logLevel
 }
 
@@ -148,6 +149,7 @@ func ParseArgs() {
 		serverCmd := flag.NewFlagSet("server", flag.ExitOnError)
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(serverCmd)
 		clientID := serverCmd.String("id", "client1", "target client ID")
+		stunServer := serverCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
 		serverCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy server [flags]")
 			fmt.Println("  -R ROUTE                      Route configuration (supports multiple)")
@@ -171,6 +173,7 @@ func ParseArgs() {
 		config.Mode = "server"
 		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
 		config.ClientID = *clientID
+		config.StunServer = *stunServer
 		config.Routes = make([]RouteConfig, 0)
 		// If -R parameter is provided, use the parsed route configurations
 		if len(routeStrs) > 0 {
@@ -191,6 +194,7 @@ func ParseArgs() {
 		clientCmd := flag.NewFlagSet("client", flag.ExitOnError)
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(clientCmd)
 		clientID := clientCmd.String("id", "client1", "client identifier")
+		stunServer := clientCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
 		clientCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy client [flags]")
 			clientCmd.PrintDefaults()
@@ -199,6 +203,7 @@ func ParseArgs() {
 		config.Mode = "client"
 		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
 		config.ClientID = *clientID
+		config.StunServer = *stunServer
 
 	default:
 		fmt.Println("Unknown command:", cmd)

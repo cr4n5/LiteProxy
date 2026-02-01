@@ -71,6 +71,7 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 
 	switch hm.ClientType {
 	case "server":
+		log.Infof("(SERVER) Remote Addr %s: connected", conn.RemoteAddr().String())
 		for {
 			newStream, err := conn.AcceptStream(ctx)
 			if err != nil {

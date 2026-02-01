@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/cr4n5/liteproxy/common"
@@ -14,12 +15,16 @@ import (
 )
 
 type Server struct {
-	cfg *config.Config
+	cfg        *config.Config
+	p2pOnce    sync.Once
+	p2pconn    *quic.Conn
+	p2pReadyCh chan struct{}
 }
 
 func NewServer(cfg *config.Config) *Server {
 	return &Server{
-		cfg: cfg,
+		cfg:        cfg,
+		p2pReadyCh: make(chan struct{}),
 	}
 }
 
@@ -67,7 +72,7 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route config.RouteConfig) error {
 	switch route.Protocol {
 	case "tcp":
-		ln, err := net.Listen("tcp", route.LocalAddr)
+		ln, err := net.Listen("tcp4", route.LocalAddr)
 		if err != nil {
 			return err
 		}
@@ -86,7 +91,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			go s.handleTCPConnection(ctx, route, bridgeConn, conn)
 		}
 	case "udp":
-		ln, err := net.ListenPacket("udp", route.LocalAddr)
+		ln, err := net.ListenPacket("udp4", route.LocalAddr)
 		if err != nil {
 			return err
 		}
@@ -105,6 +110,35 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				return err
 			}
 			go s.handleUDPConnection(ctx, route, bridgeConn, addr, buf[:n], udpSession)
+		}
+	case "ptcp", "pudp":
+		// Initialize P2P connection once
+		s.p2pOnce.Do(func() {
+			defer close(s.p2pReadyCh)
+			// Open new stream to bridge
+			stream, err := lib.HandConnToTarget(ctx, &route, bridgeConn)
+			if err != nil {
+				log.Errorf("(P2P) failed to open stream: %v", err)
+				return
+			}
+			defer stream.Close()
+			p2pConn, err := lib.EstablishP2PConnection(ctx, *s.cfg, stream)
+			if err != nil {
+				log.Errorf("(P2P) failed to establish P2P connection: %v", err)
+				return
+			}
+			s.p2pconn = p2pConn
+		})
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-s.p2pReadyCh:
+			if s.p2pconn == nil {
+				return errors.New("failed to establish P2P connection")
+			}
+			route.Protocol = route.Protocol[1:] // remove 'p' prefix
+			return s.handleRoute(ctx, s.p2pconn, route)
 		}
 	default:
 		// unsupported protocol
@@ -144,5 +178,5 @@ func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConf
 		udpSession.DeleteStream(addr)
 		return
 	}
-	log.Debugf("(UDP) UDP data forwarded from %s to target %s", addr.String(), route.ClientAddr)
+	log.Debugf("(UDP) UDP data forwarded from %s to target %s, %d bytes", addr.String(), route.ClientAddr, len(data))
 }

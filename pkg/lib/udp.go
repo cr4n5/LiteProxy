@@ -106,7 +106,7 @@ func (u *UDPSession) ForwardStreamData(addr net.Addr, stream *quic.Stream, route
 			return
 		}
 		u.PingStream(pingCh)
-		log.Debugf("(UDP) UDP data forwarded from target %s to %s", route.ClientAddr, addr.String())
+		log.Debugf("(UDP) UDP data forwarded from target %s to %s, %d bytes", route.ClientAddr, addr.String(), len(data))
 	}
 }
 
