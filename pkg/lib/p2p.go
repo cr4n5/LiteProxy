@@ -226,6 +226,7 @@ func EstablishP2PConnection(ctx context.Context, cfg config.Config, stream *quic
 	if err != nil {
 		return nil, err
 	}
+	var natRule NatRule
 	if cfg.Mode == "server" {
 		// Read peer external addresses
 		peerData, err := StreamReadWithLength(stream, 0)
@@ -237,69 +238,130 @@ func EstablishP2PConnection(ctx context.Context, cfg config.Config, stream *quic
 		if err != nil {
 			return nil, err
 		}
-		// analyze peer addresses
+		// analyze addresses
+		var peerNatRule NatRule
+		natRule, peerNatRule, err = AnalyzeNatRule(externalAddrs, peerExternalAddrs)
+		if err != nil {
+			return nil, err
+		}
+		// send nat rule to client
+		natRuleData, err := json.Marshal(peerNatRule)
+		if err != nil {
+			return nil, err
+		}
+		_, err = StreamWriteWithLength(stream, natRuleData, 0)
+		if err != nil {
+			return nil, err
+		}
 	} else {
+		// send external addresses to server
 		_, err = StreamWriteWithLength(stream, data, 0)
+		if err != nil {
+			return nil, err
+		}
+		// read nat rule from server
+		natRuleData, err := StreamReadWithLength(stream, 0)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(natRuleData, &natRule)
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	// make nat hole
+	err = MakeNatHole(natRule, localAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	return nil, nil
+}
+
+func MakeNatHole(natRule NatRule, localAddr net.Addr) error {
+	return nil
 }
 
 func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNatRule NatRule, err error) {
 	// analyze nat type
-	natType, difference, err := AnalyzeNatType(externalAddrs)
+	natType, peerNatRule, err := AnalyzeNatType(externalAddrs)
 	if err != nil {
 		return natRule, peerNatRule, err
 	}
-	peerNatType, peerDifference, err := AnalyzeNatType(peerExternalAddrs)
+	peerNatType, natRule, err := AnalyzeNatType(peerExternalAddrs)
 	if err != nil {
 		return natRule, peerNatRule, err
 	}
-	if natType == EasyNat && peerNatType == EasyNat {
-		natRule = NatRule{
-			Mode:         Mode0,
-			ExternalAddr: externalAddrs[0],
-			Role:         Receiver,
+	natRule.ExternalAddr = externalAddrs[0]
+	peerNatRule.ExternalAddr = peerExternalAddrs[0]
+	// determine nat traversal mode
+	if natType == EasyNat && peerNatType == EasyNat { // both easy
+		natRule.Mode = Mode0
+		peerNatRule.Mode = Mode0
+		natRule.Role = Receiver // default (SERVER) as receiver
+		peerNatRule.Role = Sender
+	} else if natType+peerNatType == EasyNat+HardNat { // one easy, one hard
+		if natRule.RangePeerPort == nil || peerNatRule.RangePeerPort == nil { // can not predict port
+			natRule.Mode = Mode2
+			peerNatRule.Mode = Mode2
+		} else { // can predict port
+			natRule.Mode = Mode1
+			peerNatRule.Mode = Mode1
 		}
-		peerNatRule = NatRule{
-			Mode:         Mode0,
-			ExternalAddr: peerExternalAddrs[0],
-			Role:         Sender,
+
+		if natType == EasyNat { // easy nat as sender
+			natRule.Role = Sender
+			peerNatRule.Role = Receiver
+		} else {
+			natRule.Role = Receiver
+			peerNatRule.Role = Sender
 		}
 	}
 	return natRule, peerNatRule, nil
 }
 
-func AnalyzeNatType(addrs []string) (natType int, difference int, err error) {
+// From: max(port-difference-5, port-maxNumber, 1),
+// To:   min(port+difference+5, port+maxNumber, 65535),
+func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 	ip0, port0Str, err := net.SplitHostPort(addrs[0])
 	if err != nil {
-		return 0, 0, err
+		return 0, NatRule{}, err
 	}
 	port0, err := strconv.Atoi(port0Str)
 	if err != nil {
-		return 0, 0, err
+		return 0, NatRule{}, err
 	}
 	ip1, port1Str, err := net.SplitHostPort(addrs[1])
 	if err != nil {
-		return 0, 0, err
+		return 0, NatRule{}, err
 	}
 	port1, err := strconv.Atoi(port1Str)
 	if err != nil {
-		return 0, 0, err
+		return 0, NatRule{}, err
+	}
+	natRule = NatRule{
+		PeerAddr: addrs[0],
+		PeerIP:   net.ParseIP(ip0),
+		PeerPort: port0,
 	}
 	if ip0 == ip1 {
 		if port0 == port1 {
 			natType = EasyNat
-			difference = 0
+			natRule.RangePeerPort = []int{port0}
 		} else {
 			natType = HardNat
-			difference = max(port0-port1, port1-port0)
+			difference := max(port0-port1, port1-port0)
+			if difference >= 1 && difference <= 5 {
+				From := max(port0-difference-5, port0-10, 1)
+				To := min(port0+difference+5, port0+10, 65535)
+				for p := From; p <= To; p++ {
+					natRule.RangePeerPort = append(natRule.RangePeerPort, p)
+				}
+			}
 		}
 	} else {
-		return 0, 0, fmt.Errorf("different IPs detected: %s vs %s", ip0, ip1)
+		return 0, NatRule{}, fmt.Errorf("different IPs detected: %s vs %s", ip0, ip1)
 	}
-	return natType, difference, nil
+	return natType, natRule, nil
 }
