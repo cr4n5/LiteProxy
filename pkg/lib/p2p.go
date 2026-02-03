@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net"
+	"slices"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/pion/stun/v2"
 	"github.com/quic-go/quic-go"
+	log "github.com/sirupsen/logrus"
 )
 
 // util
@@ -189,6 +194,7 @@ func (c *discoverConn) discoverFromStunServer(addr string) ([]string, error) {
 	if resp.externalAddr == "" {
 		return nil, fmt.Errorf("no external address found from changed address")
 	}
+	externalAddrs = append(externalAddrs, resp.externalAddr)
 	return externalAddrs, nil
 }
 
@@ -217,6 +223,7 @@ type NatRule struct {
 }
 
 func EstablishP2PConnection(ctx context.Context, cfg config.Config, stream *quic.Stream) (*quic.Conn, error) {
+	defer stream.Close()
 	// Discover external addresses
 	externalAddrs, localAddr, err := Discover([]string{cfg.StunServer}, "")
 	if err != nil {
@@ -231,13 +238,14 @@ func EstablishP2PConnection(ctx context.Context, cfg config.Config, stream *quic
 		// Read peer external addresses
 		peerData, err := StreamReadWithLength(stream, 0)
 		if err != nil {
-			return nil, err
+			return nil, common.TranslateStreamError(err)
 		}
 		var peerExternalAddrs []string
 		err = json.Unmarshal(peerData, &peerExternalAddrs)
 		if err != nil {
 			return nil, err
 		}
+		log.Infof("(P2P) External Addrs %v, Peer External Addrs %v", externalAddrs, peerExternalAddrs)
 		// analyze addresses
 		var peerNatRule NatRule
 		natRule, peerNatRule, err = AnalyzeNatRule(externalAddrs, peerExternalAddrs)
@@ -271,16 +279,64 @@ func EstablishP2PConnection(ctx context.Context, cfg config.Config, stream *quic
 	}
 
 	// make nat hole
-	err = MakeNatHole(natRule, localAddr)
+	log.Infof("(P2P) Starting NAT traversal with role: %s, mode: %s", map[int]string{Sender: "Sender", Receiver: "Receiver"}[natRule.Role], map[int]string{Mode0: "Mode0", Mode1: "Mode1", Mode2: "Mode2"}[natRule.Mode])
+	p2pcontext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	natHole, err := NewNatHole(p2pcontext, &cfg, natRule, localAddr)
 	if err != nil {
 		return nil, err
 	}
+	rContext, rCancel := context.WithCancel(p2pcontext)
+	defer rCancel()
+	go natHole.MakeNatHole(p2pcontext, rContext)
 
-	return nil, nil
-}
-
-func MakeNatHole(natRule NatRule, localAddr net.Addr) error {
-	return nil
+	// wait for result
+	select {
+	case err := <-natHole.resultChan:
+		if err != nil {
+			return nil, err
+		}
+		rCancel()
+		// establish quic connection over nat hole
+		switch natRule.Role {
+		case Sender:
+			ln, err := quic.Listen(natHole.resultConn, common.GenerateTLSConfig(), common.QuicConfig)
+			defer ln.Close()
+			if err != nil {
+				return nil, err
+			}
+			ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			return ln.Accept(ctxTimeout)
+		case Receiver:
+			peerAddr, err := net.ResolveUDPAddr("udp4", natRule.PeerAddr)
+			if err != nil {
+				return nil, err
+			}
+			for i := range 15 {
+				ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+				conn, err := quic.Dial(ctxTimeout, natHole.resultConn, peerAddr, common.GenerateClientTLSConfig(), common.QuicConfig)
+				if err != nil {
+					log.Errorf("(P2P) failed to dial P2P connection, attempt %d: %v", i+1, err)
+					continue
+				}
+				go func() {
+					select {
+					case <-conn.Context().Done():
+					case <-ctx.Done():
+					}
+					natHole.resultConn.Close()
+				}()
+				return conn, nil
+			}
+			natHole.resultConn.Close()
+			return nil, fmt.Errorf("failed to dial P2P connection")
+		}
+	case <-time.After(60 * time.Second):
+		return nil, fmt.Errorf("establish P2P connection timeout")
+	}
+	return nil, fmt.Errorf("failed to establish P2P connection")
 }
 
 func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNatRule NatRule, err error) {
@@ -321,8 +377,8 @@ func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNat
 	return natRule, peerNatRule, nil
 }
 
-// From: max(port-difference-5, port-maxNumber, 1),
-// To:   min(port+difference+5, port+maxNumber, 65535),
+// From: max(port-difference-5, port-10, 1),
+// To:   min(port+difference+5, port+10, 65535),
 func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 	ip0, port0Str, err := net.SplitHostPort(addrs[0])
 	if err != nil {
@@ -364,4 +420,224 @@ func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 		return 0, NatRule{}, fmt.Errorf("different IPs detected: %s vs %s", ip0, ip1)
 	}
 	return natType, natRule, nil
+}
+
+// -----------------------------
+// ----------NatHole------------
+type NatHole struct {
+	natRule    NatRule
+	udpConn    []*net.UDPConn
+	peerPort   []int
+	accessKey  string
+	resultChan chan error
+	resultConn *net.UDPConn
+	mu         sync.Mutex
+}
+
+func NewNatHole(ctx context.Context, cfg *config.Config, natRule NatRule, localAddr net.Addr) (*NatHole, error) {
+	natHole := &NatHole{
+		natRule:    natRule,
+		udpConn:    make([]*net.UDPConn, 0),
+		accessKey:  cfg.AccessKey,
+		resultChan: make(chan error, 1),
+	}
+
+	tmpConn, err := net.ListenUDP("udp4", localAddr.(*net.UDPAddr))
+	if err != nil {
+		return nil, err
+	}
+	natHole.udpConn = append(natHole.udpConn, tmpConn)
+	natHole.peerPort = append(natHole.peerPort, natRule.PeerPort)
+	go natHole.Listen(ctx, tmpConn)
+	go natHole.Send(ctx, tmpConn, net.JoinHostPort(natRule.PeerIP.String(), strconv.Itoa(natRule.PeerPort)))
+	return natHole, nil
+}
+
+func (nh *NatHole) MakeNatHole(p2pctx, rctx context.Context) {
+	switch nh.natRule.Mode {
+	case Mode0:
+		select {
+		case <-p2pctx.Done():
+			return
+		case <-rctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			// timeout
+			log.Infof("(P2P) Mode0 timeout, proceeding to Mode1")
+		}
+		go nh.MakeMode1Hole(p2pctx)
+		select {
+		case <-p2pctx.Done():
+			return
+		case <-rctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			// timeout
+			log.Infof("(P2P) Mode1 timeout, proceeding to Mode2")
+		}
+		go nh.MakeMode2Hole(p2pctx)
+	case Mode1:
+		go nh.MakeMode1Hole(p2pctx)
+		select {
+		case <-p2pctx.Done():
+			return
+		case <-rctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			// timeout
+			log.Infof("(P2P) Mode1 timeout, proceeding to Mode2")
+		}
+		go nh.MakeMode2Hole(p2pctx)
+	case Mode2:
+		go nh.MakeMode2Hole(p2pctx)
+	default:
+		nh.SendChannel(fmt.Errorf("unknown NAT traversal mode: %d", nh.natRule.Mode))
+	}
+}
+
+func (nh *NatHole) SendChannel(err error) {
+	select {
+	case nh.resultChan <- err:
+	default:
+	}
+}
+
+func (nh *NatHole) Send(ctx context.Context, conn *net.UDPConn, peerAddr string) {
+	log.Debugf("(P2P) Send started on local addr %s to peer addr %s", conn.LocalAddr().String(), peerAddr)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// send packet to peer
+			peerAddr, err := net.ResolveUDPAddr("udp4", peerAddr)
+			if err != nil {
+				nh.SendChannel(err)
+				return
+			}
+			_, err = conn.WriteToUDP([]byte(nh.accessKey), peerAddr)
+			if err != nil {
+				nh.SendChannel(err)
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
+	log.Debugf("(P2P) Listen started on local addr %s", conn.LocalAddr().String())
+	buf := make([]byte, 65535)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer func() {
+		if conn != nh.resultConn {
+			conn.Close()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			_, addr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				if netErr, ok := err.(net.Error); ok {
+					if netErr.Timeout() {
+						log.Debugf("(P2P) Listen timeout on local addr %s, continue...", conn.LocalAddr().String())
+						continue
+					}
+				}
+				nh.SendChannel(err)
+				return
+			}
+			nh.mu.Lock()
+			if nh.resultConn == nil {
+				nh.resultConn = conn
+				// set no deadline
+				conn.SetReadDeadline(time.Time{})
+				log.Infof("(P2P) Successfully received msg with peer %s via local addr %s", addr.String(), conn.LocalAddr().String())
+				nh.SendChannel(nil)
+			}
+			nh.mu.Unlock()
+			return
+		}
+	}
+}
+
+func (nh *NatHole) MakeMode1Hole(ctx context.Context) {
+	switch nh.natRule.Role {
+	case Sender:
+		conn := nh.udpConn[0]
+		for _, port := range nh.natRule.RangePeerPort {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if port != nh.natRule.PeerPort {
+				go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.PeerIP.String(), strconv.Itoa(port)))
+				nh.peerPort = append(nh.peerPort, port)
+			}
+		}
+	case Receiver:
+		for i := 1; i < 10; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			tmpConn, err := net.ListenUDP("udp4", nil)
+			if err != nil {
+				nh.SendChannel(err)
+				return
+			}
+			nh.udpConn = append(nh.udpConn, tmpConn)
+			go nh.Listen(ctx, tmpConn)
+			go nh.Send(ctx, tmpConn, net.JoinHostPort(nh.natRule.PeerIP.String(), strconv.Itoa(nh.natRule.PeerPort)))
+		}
+	}
+}
+
+func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
+	switch nh.natRule.Role {
+	case Sender:
+		conn := nh.udpConn[0]
+		i := len(nh.peerPort)
+		for i <= 1000 {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			for {
+				port := rand.IntN(65535-1024) + 1024
+				if !slices.Contains(nh.peerPort, port) {
+					go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.PeerIP.String(), strconv.Itoa(port)))
+					nh.peerPort = append(nh.peerPort, port)
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			i++
+		}
+	case Receiver:
+		i := len(nh.udpConn)
+		for i <= 256 {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			tmpConn, err := net.ListenUDP("udp4", nil)
+			if err != nil {
+				nh.SendChannel(err)
+				return
+			}
+			nh.udpConn = append(nh.udpConn, tmpConn)
+			go nh.Listen(ctx, tmpConn)
+			go nh.Send(ctx, tmpConn, net.JoinHostPort(nh.natRule.PeerIP.String(), strconv.Itoa(nh.natRule.PeerPort)))
+			time.Sleep(10 * time.Millisecond)
+			i++
+		}
+	}
 }

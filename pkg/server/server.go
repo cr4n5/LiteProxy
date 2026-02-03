@@ -35,6 +35,9 @@ func (s *Server) Start(ctx context.Context) {
 			log.Errorf("server exited with error: %v", err)
 		}
 		<-time.After(5 * time.Second)
+		s.p2pOnce = sync.Once{}
+		s.p2pconn = nil
+		s.p2pReadyCh = make(chan struct{})
 	}
 }
 
@@ -127,6 +130,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				log.Errorf("(P2P) failed to establish P2P connection: %v", err)
 				return
 			}
+			log.Infof("(P2P) P2P connection established")
 			s.p2pconn = p2pConn
 		})
 
