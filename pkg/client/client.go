@@ -8,6 +8,7 @@ import (
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/cr4n5/liteproxy/pkg/lib"
+	"github.com/cr4n5/liteproxy/pkg/lib/p2p"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
 )
@@ -103,7 +104,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		}
 		log.Infof("(UDP) piping between stream and UDP target %s ended normally", hcm.ClientAddr)
 	case "ptcp", "pudp":
-		p2pConn, err := lib.EstablishP2PConnection(ctx, *c.cfg, stream)
+		p2pConn, err := p2p.EstablishP2PConnection(ctx, *c.cfg, stream)
 		if err != nil {
 			log.Errorf("(P2P) failed to establish P2P connection: %v", err)
 			return
@@ -113,6 +114,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		for {
 			newStream, err := p2pConn.AcceptStream(ctx)
 			if err != nil {
+				log.Errorf("(P2P) failed to accept P2P stream: %v", err)
 				return
 			}
 			go c.handleStream(ctx, newStream)

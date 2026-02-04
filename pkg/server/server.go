@@ -10,6 +10,7 @@ import (
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/cr4n5/liteproxy/pkg/lib"
+	"github.com/cr4n5/liteproxy/pkg/lib/p2p"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
 )
@@ -125,13 +126,18 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				return
 			}
 			defer stream.Close()
-			p2pConn, err := lib.EstablishP2PConnection(ctx, *s.cfg, stream)
+			log.Infof("(P2P) Prepare to establish P2P connection")
+			p2pConn, err := p2p.EstablishP2PConnection(ctx, *s.cfg, stream)
 			if err != nil {
 				log.Errorf("(P2P) failed to establish P2P connection: %v", err)
 				return
 			}
 			log.Infof("(P2P) P2P connection established")
 			s.p2pconn = p2pConn
+			go func() {
+				<-p2pConn.Context().Done()
+				bridgeConn.CloseWithError(0, "closing bridge connection due to P2P connection closed")
+			}()
 		})
 
 		select {
