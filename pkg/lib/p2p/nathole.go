@@ -52,6 +52,9 @@ func NewNatHole(ctx context.Context, natRule NatRule, localAddr net.Addr) (*NatH
 	natHole.peerPort = append(natHole.peerPort, natRule.PeerPort)
 	go natHole.Listen(ctx, tmpConn)
 	go natHole.Send(ctx, tmpConn, net.JoinHostPort(natRule.PeerIP, strconv.Itoa(natRule.PeerPort)))
+	if natRule.OtherPeerIP != "" {
+		go natHole.Send(ctx, tmpConn, net.JoinHostPort(natRule.OtherPeerIP, strconv.Itoa(natRule.PeerPort)))
+	}
 	return natHole, nil
 }
 
@@ -223,6 +226,10 @@ func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
 			for {
 				port := rand.IntN(65535-1024) + 1024
 				if !slices.Contains(nh.peerPort, port) {
+					if nh.natRule.OtherPeerIP != "" {
+						go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.OtherPeerIP, strconv.Itoa(port)))
+						i++
+					}
 					go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.PeerIP, strconv.Itoa(port)))
 					nh.peerPort = append(nh.peerPort, port)
 					break

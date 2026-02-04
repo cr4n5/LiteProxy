@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 )
@@ -20,10 +19,10 @@ const (
 )
 
 type NatRule struct {
-	Mode int
-	// ExternalAddr  string
+	Mode          int
 	PeerAddr      string
 	PeerIP        string
+	OtherPeerIP   string
 	PeerPort      int
 	Role          int
 	RangePeerPort []int
@@ -39,8 +38,6 @@ func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNat
 	if err != nil {
 		return natRule, peerNatRule, err
 	}
-	// natRule.ExternalAddr = externalAddrs[0]
-	// peerNatRule.ExternalAddr = peerExternalAddrs[0]
 
 	// determine nat traversal mode
 	if natType == EasyNat && peerNatType == EasyNat { // both easy
@@ -110,7 +107,8 @@ func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 			}
 		}
 	} else {
-		return 0, NatRule{}, fmt.Errorf("different IPs detected: %s vs %s", ip0, ip1)
+		natType = HardNat
+		natRule.OtherPeerIP = ip1
 	}
 	return natType, natRule, nil
 }
