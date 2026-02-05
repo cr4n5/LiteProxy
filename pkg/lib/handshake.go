@@ -45,6 +45,7 @@ func HandshakeToBridge(ctx context.Context, cfg *config.Config) (*quic.Conn, err
 	if err != nil {
 		return nil, err
 	}
+
 	// Handle handshake
 	hm := NewHandshakeMessage(cfg)
 	data, err := hm.Encode()
@@ -52,6 +53,7 @@ func HandshakeToBridge(ctx context.Context, cfg *config.Config) (*quic.Conn, err
 	if err != nil {
 		return nil, err
 	}
+
 	// wait close
 	StreamWaitClosed(stream)
 	return conn, nil

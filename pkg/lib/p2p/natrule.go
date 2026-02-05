@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net"
 	"strconv"
+
+	"github.com/cr4n5/liteproxy/config"
 )
 
 const (
@@ -28,7 +30,7 @@ type NatRule struct {
 	RangePeerPort []int
 }
 
-func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNatRule NatRule, err error) {
+func AnalyzeNatRule(cfg *config.Config, externalAddrs, peerExternalAddrs []string) (natRule, peerNatRule NatRule, err error) {
 	// analyze nat type
 	natType, peerNatRule, err := AnalyzeNatType(externalAddrs)
 	if err != nil {
@@ -43,8 +45,15 @@ func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNat
 	if natType == EasyNat && peerNatType == EasyNat { // both easy
 		natRule.Mode = Mode0
 		peerNatRule.Mode = Mode0
-		natRule.Role = Receiver // default (SERVER) as receiver
-		peerNatRule.Role = Sender
+
+		// default (SERVER) as receiver
+		if cfg.Mode == "server" {
+			natRule.Role = Receiver
+			peerNatRule.Role = Sender
+		} else {
+			natRule.Role = Sender
+			peerNatRule.Role = Receiver
+		}
 	} else if natType+peerNatType == EasyNat+HardNat { // one easy, one hard
 		if natRule.RangePeerPort == nil || peerNatRule.RangePeerPort == nil { // can not predict port
 			natRule.Mode = Mode2
@@ -64,6 +73,7 @@ func AnalyzeNatRule(externalAddrs, peerExternalAddrs []string) (natRule, peerNat
 	} else {
 		return natRule, peerNatRule, errors.New("both hard nat is not supported")
 	}
+
 	return natRule, peerNatRule, nil
 }
 
@@ -78,6 +88,7 @@ func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 	if err != nil {
 		return 0, NatRule{}, err
 	}
+
 	ip1, port1Str, err := net.SplitHostPort(addrs[1])
 	if err != nil {
 		return 0, NatRule{}, err
@@ -86,11 +97,13 @@ func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 	if err != nil {
 		return 0, NatRule{}, err
 	}
+
 	natRule = NatRule{
 		PeerAddr: addrs[0],
 		PeerIP:   ip0,
 		PeerPort: port0,
 	}
+
 	if ip0 == ip1 {
 		if port0 == port1 {
 			natType = EasyNat
@@ -98,6 +111,7 @@ func AnalyzeNatType(addrs []string) (natType int, natRule NatRule, err error) {
 		} else {
 			natType = HardNat
 			difference := max(port0-port1, port1-port0)
+
 			if difference >= 1 && difference <= 5 {
 				From := max(port0-difference-5, port0-10, 1)
 				To := min(port0+difference+5, port0+10, 65535)

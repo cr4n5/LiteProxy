@@ -36,6 +36,7 @@ func (s *Server) Start(ctx context.Context) {
 			log.Errorf("server exited with error: %v", err)
 		}
 		<-time.After(5 * time.Second)
+
 		s.p2pOnce = sync.Once{}
 		s.p2pconn = nil
 		s.p2pReadyCh = make(chan struct{})
@@ -81,6 +82,8 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			return err
 		}
 		defer ln.Close()
+
+		// close the listener when context is done
 		go func() {
 			<-ctx.Done()
 			ln.Close()
@@ -94,17 +97,21 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			}
 			go s.handleTCPConnection(ctx, route, bridgeConn, conn)
 		}
+
 	case "udp":
 		ln, err := net.ListenPacket("udp4", route.LocalAddr)
 		if err != nil {
 			return err
 		}
 		defer ln.Close()
+
+		// close the listener when context is done
 		go func() {
 			<-ctx.Done()
 			ln.Close()
 		}()
 		log.Infof("(UDP) server listening on %s", route.LocalAddr)
+
 		udpSession := lib.NewUDPSession(ln)
 		defer udpSession.Close()
 		buf := make([]byte, 65535)
@@ -115,6 +122,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			}
 			go s.handleUDPConnection(ctx, route, bridgeConn, addr, buf[:n], udpSession)
 		}
+
 	case "ptcp", "pudp":
 		// Initialize P2P connection once
 		s.p2pOnce.Do(func() {
@@ -126,6 +134,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				return
 			}
 			defer stream.Close()
+
 			log.Infof("(P2P) Prepare to establish P2P connection")
 			p2pConn, err := p2p.EstablishP2PConnection(ctx, *s.cfg, stream)
 			if err != nil {
@@ -133,7 +142,9 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				return
 			}
 			log.Infof("(P2P) P2P connection established")
+
 			s.p2pconn = p2pConn
+			// go routine to close the P2P connection when context is done
 			go func() {
 				<-p2pConn.Context().Done()
 				bridgeConn.CloseWithError(0, "closing bridge connection due to P2P connection closed")

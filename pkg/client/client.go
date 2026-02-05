@@ -41,6 +41,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	log.Infof("Attempting to connect to bridge at %s, log an error if it fails, otherwise it succeeded.", c.cfg.BridgeAddr)
 	defer conn.CloseWithError(0, "closing connection")
+
 	for {
 		newStream, err := conn.AcceptStream(ctx)
 		if err != nil {
@@ -52,6 +53,7 @@ func (c *Client) Run(ctx context.Context) error {
 
 func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 	defer stream.Close()
+
 	// Handle handconn message
 	data, err := lib.StreamReadWithLength(stream, 0)
 	if err != nil {
@@ -63,6 +65,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		log.Errorf("failed to decode handconn message: %v", err)
 		return
 	}
+
 	// Connect to target
 	switch hcm.Protocol {
 	case "tcp":
@@ -73,6 +76,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			return
 		}
 		defer targetConn.Close()
+
 		log.Infof("(TCP) connected to target %s ", hcm.ClientAddr)
 		// Start piping data between stream and target connection
 		err = lib.Pipe(stream, targetConn)
@@ -81,6 +85,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			return
 		}
 		log.Infof("(TCP) piping between stream and target %s ended normally", hcm.ClientAddr)
+
 	case "udp":
 		udpAddr, err := net.ResolveUDPAddr("udp", hcm.ClientAddr)
 		if err != nil {
@@ -88,6 +93,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			stream.CancelWrite(common.ErrTargetUnreachable)
 			return
 		}
+
 		udpConn, err := net.DialUDP("udp", nil, udpAddr)
 		if err != nil {
 			log.Errorf("(UDP) failed to connect to UDP target %s: %v", hcm.ClientAddr, err)
@@ -95,6 +101,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			return
 		}
 		defer udpConn.Close()
+
 		log.Infof("(UDP) connected to UDP target %s ", hcm.ClientAddr)
 		// Handle UDP with proper length prefix protocol
 		err = lib.PipeUDPStream(stream, udpConn)
@@ -103,6 +110,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			return
 		}
 		log.Infof("(UDP) piping between stream and UDP target %s ended normally", hcm.ClientAddr)
+
 	case "ptcp", "pudp":
 		p2pConn, err := p2p.EstablishP2PConnection(ctx, *c.cfg, stream)
 		if err != nil {
@@ -110,6 +118,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			return
 		}
 		defer p2pConn.CloseWithError(0, "closing P2P connection")
+
 		log.Info("(P2P) P2P connection established")
 		for {
 			newStream, err := p2pConn.AcceptStream(ctx)
@@ -119,6 +128,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 			}
 			go c.handleStream(ctx, newStream)
 		}
+
 	default:
 		// Unsupported protocol
 		log.Errorf("unsupported protocol %s from handconn message", hcm.Protocol)

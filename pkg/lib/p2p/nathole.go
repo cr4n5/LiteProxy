@@ -48,13 +48,16 @@ func NewNatHole(ctx context.Context, natRule NatRule, localAddr net.Addr) (*NatH
 	if err != nil {
 		return nil, err
 	}
+
 	natHole.udpConn = append(natHole.udpConn, tmpConn)
 	natHole.peerPort = append(natHole.peerPort, natRule.PeerPort)
+
 	go natHole.Listen(ctx, tmpConn)
 	go natHole.Send(ctx, tmpConn, net.JoinHostPort(natRule.PeerIP, strconv.Itoa(natRule.PeerPort)))
 	if natRule.OtherPeerIP != "" {
 		go natHole.Send(ctx, tmpConn, net.JoinHostPort(natRule.OtherPeerIP, strconv.Itoa(natRule.PeerPort)))
 	}
+
 	return natHole, nil
 }
 
@@ -64,7 +67,7 @@ func (nh *NatHole) MakeNatHole(p2pctx context.Context) {
 		select {
 		case <-p2pctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(5 * time.Second):
 			// timeout
 			if nh.IsResultReady() {
 				return
@@ -72,10 +75,11 @@ func (nh *NatHole) MakeNatHole(p2pctx context.Context) {
 			log.Infof("(P2P) Mode0 timeout, proceeding to Mode1")
 		}
 		go nh.MakeMode1Hole(p2pctx)
+
 		select {
 		case <-p2pctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(5 * time.Second):
 			// timeout
 			if nh.IsResultReady() {
 				return
@@ -83,12 +87,14 @@ func (nh *NatHole) MakeNatHole(p2pctx context.Context) {
 			log.Infof("(P2P) Mode1 timeout, proceeding to Mode2")
 		}
 		go nh.MakeMode2Hole(p2pctx)
+
 	case Mode1:
 		go nh.MakeMode1Hole(p2pctx)
+
 		select {
 		case <-p2pctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(5 * time.Second):
 			// timeout
 			if nh.IsResultReady() {
 				return
@@ -96,8 +102,10 @@ func (nh *NatHole) MakeNatHole(p2pctx context.Context) {
 			log.Infof("(P2P) Mode1 timeout, proceeding to Mode2")
 		}
 		go nh.MakeMode2Hole(p2pctx)
+
 	case Mode2:
 		go nh.MakeMode2Hole(p2pctx)
+
 	default:
 		nh.SendChannel(fmt.Errorf("unknown NAT traversal mode: %d", nh.natRule.Mode))
 	}
@@ -116,6 +124,7 @@ func (nh *NatHole) Send(ctx context.Context, conn *net.UDPConn, peerAddr string)
 				nh.SendChannel(err)
 				return
 			}
+
 			_, err = conn.WriteToUDP([]byte{0x00}, peerAddr)
 			if err != nil {
 				nh.SendChannel(err)
@@ -135,6 +144,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 			conn.Close()
 		}
 	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -143,6 +153,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 			if nh.IsResultReady() {
 				return
 			}
+
 			_, addr, err := conn.ReadFromUDP(buf)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok {
@@ -154,6 +165,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 				nh.SendChannel(err)
 				return
 			}
+
 			nh.mu.Lock()
 			if nh.resultConn == nil {
 				nh.resultConn = conn
@@ -164,6 +176,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 				nh.SendChannel(nil)
 			}
 			nh.mu.Unlock()
+
 			return
 		}
 	}
@@ -182,11 +195,13 @@ func (nh *NatHole) MakeMode1Hole(ctx context.Context) {
 			if nh.IsResultReady() {
 				return
 			}
+
 			if port != nh.natRule.PeerPort {
 				go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.PeerIP, strconv.Itoa(port)))
 				nh.peerPort = append(nh.peerPort, port)
 			}
 		}
+
 	case Receiver:
 		for i := 1; i < 10; i++ {
 			select {
@@ -197,12 +212,14 @@ func (nh *NatHole) MakeMode1Hole(ctx context.Context) {
 			if nh.IsResultReady() {
 				return
 			}
+
 			tmpConn, err := net.ListenUDP("udp4", nil)
 			if err != nil {
 				nh.SendChannel(err)
 				return
 			}
 			nh.udpConn = append(nh.udpConn, tmpConn)
+
 			go nh.Listen(ctx, tmpConn)
 			go nh.Send(ctx, tmpConn, net.JoinHostPort(nh.natRule.PeerIP, strconv.Itoa(nh.natRule.PeerPort)))
 		}
@@ -223,6 +240,7 @@ func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
 			if nh.IsResultReady() {
 				return
 			}
+
 			for {
 				port := rand.IntN(65535-1024) + 1024
 				if !slices.Contains(nh.peerPort, port) {
@@ -232,12 +250,14 @@ func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
 					}
 					go nh.Send(ctx, conn, net.JoinHostPort(nh.natRule.PeerIP, strconv.Itoa(port)))
 					nh.peerPort = append(nh.peerPort, port)
+
 					break
 				}
 			}
 			time.Sleep(15 * time.Millisecond)
 			i++
 		}
+
 	case Receiver:
 		i := len(nh.udpConn)
 		for i <= 256 {
@@ -249,6 +269,7 @@ func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
 			if nh.IsResultReady() {
 				return
 			}
+
 			tmpConn, err := net.ListenUDP("udp4", nil)
 			if err != nil {
 				nh.SendChannel(err)
@@ -257,6 +278,7 @@ func (nh *NatHole) MakeMode2Hole(ctx context.Context) {
 			nh.udpConn = append(nh.udpConn, tmpConn)
 			go nh.Listen(ctx, tmpConn)
 			go nh.Send(ctx, tmpConn, net.JoinHostPort(nh.natRule.PeerIP, strconv.Itoa(nh.natRule.PeerPort)))
+
 			time.Sleep(15 * time.Millisecond)
 			i++
 		}

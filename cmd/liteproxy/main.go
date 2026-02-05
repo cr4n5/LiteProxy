@@ -15,6 +15,7 @@ func main() {
 	cfg := config.GetConfig()
 	// Initialize logger
 	common.LogInit(cfg.LogLevel)
+
 	ctx := context.Background()
 
 	switch cfg.Mode {

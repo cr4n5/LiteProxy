@@ -38,6 +38,7 @@ func HandConnToTarget(ctx context.Context, cfg *config.RouteConfig, conn *quic.C
 	if err != nil {
 		return nil, err
 	}
+
 	// Send HandConnMessage
 	hcm := NewHandConnMessage(cfg)
 	data, err := hcm.Encode()
@@ -48,5 +49,6 @@ func HandConnToTarget(ctx context.Context, cfg *config.RouteConfig, conn *quic.C
 	if err != nil {
 		return nil, err
 	}
+
 	return stream, nil
 }

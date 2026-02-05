@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"github.com/cr4n5/liteproxy/common"
 )
 
 type RouteConfig struct {
@@ -125,8 +127,8 @@ func parseRoute(routeStr string) (RouteConfig, error) {
 }
 
 func ParseArgs() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: liteproxy [bridge|server|client] [flags]")
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: liteproxy [bridge|server|client|version] [flags]")
 		os.Exit(1)
 	}
 
@@ -134,22 +136,37 @@ func ParseArgs() {
 	config = &Config{}
 
 	switch cmd {
+	case "version":
+		fmt.Printf("LiteProxy Version: %s\n", common.Version)
+		os.Exit(0)
 	case "bridge":
+		config.Mode = "bridge"
+
 		bridgeCmd := flag.NewFlagSet("bridge", flag.ExitOnError)
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(bridgeCmd)
+
 		bridgeCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy bridge [flags]")
 			bridgeCmd.PrintDefaults()
 		}
+
 		bridgeCmd.Parse(os.Args[2:])
-		config.Mode = "bridge"
 		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
 
 	case "server":
+		config.Mode = "server"
+
 		serverCmd := flag.NewFlagSet("server", flag.ExitOnError)
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(serverCmd)
 		clientID := serverCmd.String("id", "client1", "target client ID")
 		stunServer := serverCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
+		// Support multiple -R flags
+		var routeStrs []string
+		serverCmd.Func("R", "route configuration (can be used multiple times)", func(s string) error {
+			routeStrs = append(routeStrs, s)
+			return nil
+		})
+
 		serverCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy server [flags]")
 			fmt.Println("  -R ROUTE                      Route configuration (supports multiple)")
@@ -163,14 +180,8 @@ func ParseArgs() {
 			fmt.Println("         -R ':8080@:80'")
 			serverCmd.PrintDefaults()
 		}
-		// Support multiple -R flags
-		var routeStrs []string
-		serverCmd.Func("R", "route configuration (can be used multiple times)", func(s string) error {
-			routeStrs = append(routeStrs, s)
-			return nil
-		})
+
 		serverCmd.Parse(os.Args[2:])
-		config.Mode = "server"
 		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
 		config.ClientID = *clientID
 		config.StunServer = *stunServer
@@ -191,16 +202,19 @@ func ParseArgs() {
 		}
 
 	case "client":
+		config.Mode = "client"
+
 		clientCmd := flag.NewFlagSet("client", flag.ExitOnError)
 		accessKey, bridgeAddr, logLevel := registerCommonFlags(clientCmd)
 		clientID := clientCmd.String("id", "client1", "client identifier")
 		stunServer := clientCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
+
 		clientCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy client [flags]")
 			clientCmd.PrintDefaults()
 		}
+
 		clientCmd.Parse(os.Args[2:])
-		config.Mode = "client"
 		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
 		config.ClientID = *clientID
 		config.StunServer = *stunServer

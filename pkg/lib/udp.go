@@ -65,6 +65,7 @@ func (u *UDPSession) SetStream(addr net.Addr, stream *quic.Stream, route *config
 	u.session.Store(addr.String(), stream)
 	u.ping.Store(addr.String(), make(chan struct{}, 1))
 	log.Infof("(UDP) UDP stream created for %s with target %s", addr.String(), route.ClientAddr)
+
 	go u.TimeoutClose(addr, route)
 	go u.ForwardStreamData(addr, stream, route)
 }

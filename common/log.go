@@ -17,6 +17,7 @@ func LogInit(level string) {
 		},
 	})
 	log.SetReportCaller(true)
+
 	lvl, err := log.ParseLevel(strings.ToLower(level))
 	if err != nil {
 		lvl = log.InfoLevel
