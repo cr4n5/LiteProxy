@@ -82,6 +82,8 @@ func GetNatRule(ctx context.Context, cfg config.Config, stream *quic.Stream) (*N
 }
 
 func WaitP2PConnection(ctx context.Context, natRule NatRule, natHole *NatHole) (*quic.Conn, error) {
+	var conn *quic.Conn
+
 	// wait for result
 	select {
 	case err := <-natHole.resultChan:
@@ -101,7 +103,11 @@ func WaitP2PConnection(ctx context.Context, natRule NatRule, natHole *NatHole) (
 			ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 
-			return ln.Accept(ctxTimeout)
+			conn, err = ln.Accept(ctxTimeout)
+			if err != nil {
+				return nil, err
+			}
+
 		case Receiver:
 			peerAddr, err := net.ResolveUDPAddr("udp4", natRule.PeerAddr)
 			if err != nil {
@@ -112,29 +118,34 @@ func WaitP2PConnection(ctx context.Context, natRule NatRule, natHole *NatHole) (
 				ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 				defer cancel()
 
-				conn, err := quic.Dial(ctxTimeout, natHole.resultConn, peerAddr, common.GenerateClientTLSConfig(), common.QuicConfig)
+				conn, err = quic.Dial(ctxTimeout, natHole.resultConn, peerAddr, common.GenerateClientTLSConfig(), common.QuicConfig)
 				if err != nil {
 					log.Errorf("(P2P) failed to dial P2P connection, attempt %d: %v", i+1, err)
 					continue
 				}
 
-				// go routine to close the conn when context is done
-				go func() {
-					select {
-					case <-conn.Context().Done():
-					case <-ctx.Done():
-					}
-					natHole.resultConn.Close()
-				}()
-
-				return conn, nil
+				break
 			}
-
-			natHole.resultConn.Close()
 		}
 	case <-time.After(20 * time.Second):
 		// timeout
 	}
 
-	return nil, fmt.Errorf("establish P2P connection timeout")
+	if conn == nil {
+		if natHole.resultConn != nil {
+			natHole.resultConn.Close()
+		}
+		return nil, fmt.Errorf("failed to establish P2P connection after timeout")
+	}
+
+	// go routine to close the conn when context is done
+	go func() {
+		select {
+		case <-conn.Context().Done():
+		case <-ctx.Done():
+		}
+		natHole.resultConn.Close()
+	}()
+
+	return conn, nil
 }
