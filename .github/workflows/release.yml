@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.24'
+
+    - name: Build for Windows
+      run: |
+        GOOS=windows GOARCH=amd64 go build -o build/liteproxy.exe ./cmd/liteproxy
+        tar -czvf build/liteproxy-windows-amd64-${{ github.ref_name }}.tar.gz -C build liteproxy.exe
+
+    - name: Build for Linux
+      run: |
+        GOOS=linux GOARCH=amd64 go build -o build/liteproxy ./cmd/liteproxy
+        tar -czvf build/liteproxy-linux-amd64-${{ github.ref_name }}.tar.gz -C build liteproxy
+
+    - name: Build for macOS (Intel)
+      run: |
+        GOOS=darwin GOARCH=amd64 go build -o build/liteproxy ./cmd/liteproxy
+        tar -czvf build/liteproxy-darwin-amd64-${{ github.ref_name }}.tar.gz -C build liteproxy
+
+    - name: Build for macOS (Apple Silicon)
+      run: |
+        GOOS=darwin GOARCH=arm64 go build -o build/liteproxy ./cmd/liteproxy
+        tar -czvf build/liteproxy-darwin-arm64-${{ github.ref_name }}.tar.gz -C build liteproxy
+
+    - name: Build for Android
+      run: |
+        GOOS=android GOARCH=arm64 go build -o build/liteproxy ./cmd/liteproxy
+        tar -czvf build/liteproxy-android-arm64-${{ github.ref_name }}.tar.gz -C build liteproxy
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: LiteProxy ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset Windows
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./build/liteproxy-windows-amd64-${{ github.ref_name }}.tar.gz
+        asset_name: liteproxy-windows-amd64-${{ github.ref_name }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Release Asset Linux
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./build/liteproxy-linux-amd64-${{ github.ref_name }}.tar.gz
+        asset_name: liteproxy-linux-amd64-${{ github.ref_name }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Release Asset macOS (Intel)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./build/liteproxy-darwin-amd64-${{ github.ref_name }}.tar.gz
+        asset_name: liteproxy-darwin-amd64-${{ github.ref_name }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Release Asset macOS (Apple Silicon)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./build/liteproxy-darwin-arm64-${{ github.ref_name }}.tar.gz
+        asset_name: liteproxy-darwin-arm64-${{ github.ref_name }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Release Asset Android
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSON_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./build/liteproxy-android-arm64-${{ github.ref_name }}.tar.gz
+        asset_name: liteproxy-android-arm64-${{ github.ref_name }}.tar.gz
+        asset_content_type: application/gzip
