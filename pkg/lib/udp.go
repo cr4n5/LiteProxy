@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/quic-go/quic-go"
 	log "github.com/sirupsen/logrus"
@@ -97,13 +98,17 @@ func (u *UDPSession) ForwardStreamData(addr net.Addr, stream *quic.Stream, route
 	}
 	for {
 		// Read data from QUIC stream with length prefix
-		data, err := StreamReadWithLength(stream, 0)
+		data, err := StreamReadWithLength(stream, -1)
 		if err != nil {
+			log.Debugf("(UDP) failed to read from stream for %s with target %s: %v", addr.String(), route.ClientAddr, common.TranslateStreamError(err))
+			u.DeleteStream(addr)
 			return
 		}
 		// Write data back to UDP addr
 		_, err = u.ln.WriteTo(data, addr)
 		if err != nil {
+			log.Debugf("(UDP) failed to write to UDP addr %s: %v", addr.String(), err)
+			u.DeleteStream(addr)
 			return
 		}
 		u.PingStream(pingCh)

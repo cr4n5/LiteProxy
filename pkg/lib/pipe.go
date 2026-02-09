@@ -38,7 +38,7 @@ func PipeUDPStream(stream *quic.Stream, udpConn *net.UDPConn) error {
 	// Stream to UDP
 	go func() {
 		for {
-			data, err := StreamReadWithLength(stream, 0)
+			data, err := StreamReadWithLength(stream, -1)
 			if err != nil {
 				errCh <- err
 				return

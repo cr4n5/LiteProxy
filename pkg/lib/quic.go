@@ -10,25 +10,35 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
+const (
+	DefaultTimeout = 5 * time.Second
+)
+
 func StreamRead(stream *quic.Stream, buf []byte, timeout int) (int, error) {
-	if timeout > 0 {
+	switch {
+	case timeout == 0:
+		stream.SetReadDeadline(time.Now().Add(DefaultTimeout))
+	case timeout < 0:
+		stream.SetReadDeadline(time.Time{})
+	default:
 		stream.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-	} else {
-		stream.SetReadDeadline(time.Now().Add(time.Duration(5) * time.Second))
 	}
+	defer stream.SetReadDeadline(time.Time{})
 	n, err := stream.Read(buf)
-	stream.SetReadDeadline(time.Time{})
 	return n, err
 }
 
 func StreamWrite(stream *quic.Stream, data []byte, timeout int) (int, error) {
-	if timeout > 0 {
+	switch {
+	case timeout == 0:
+		stream.SetWriteDeadline(time.Now().Add(DefaultTimeout))
+	case timeout < 0:
+		stream.SetWriteDeadline(time.Time{})
+	default:
 		stream.SetWriteDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-	} else {
-		stream.SetWriteDeadline(time.Now().Add(time.Duration(5) * time.Second))
 	}
+	defer stream.SetWriteDeadline(time.Time{})
 	n, err := stream.Write(data)
-	stream.SetWriteDeadline(time.Time{})
 	return n, err
 }
 
@@ -39,38 +49,59 @@ func StreamWaitClosed(stream *quic.Stream) {
 }
 
 func StreamAccept(ctx context.Context, conn *quic.Conn, timeout int) (*quic.Stream, error) {
-	if timeout <= 0 {
-		timeout = 5
+	var ctxTimeout context.Context
+	var cancel context.CancelFunc
+	switch {
+	case timeout == 0:
+		ctxTimeout, cancel = context.WithTimeout(ctx, DefaultTimeout)
+	case timeout < 0:
+		ctxTimeout = ctx
+	default:
+		ctxTimeout, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	}
-	ctxTimeout, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	return conn.AcceptStream(ctxTimeout)
 }
 
 func StreamOpen(ctx context.Context, conn *quic.Conn, timeout int) (*quic.Stream, error) {
-	if timeout <= 0 {
-		timeout = 5
+	var ctxTimeout context.Context
+	var cancel context.CancelFunc
+	switch {
+	case timeout == 0:
+		ctxTimeout, cancel = context.WithTimeout(ctx, DefaultTimeout)
+	case timeout < 0:
+		ctxTimeout = ctx
+	default:
+		ctxTimeout, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	}
-	ctxTimeout, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	return conn.OpenStreamSync(ctxTimeout)
 }
 
 func QuicDialAddr(ctx context.Context, addr string, timeout int) (*quic.Conn, error) {
-	if timeout <= 0 {
-		timeout = 5
+	var ctxTimeout context.Context
+	var cancel context.CancelFunc
+	switch {
+	case timeout == 0:
+		ctxTimeout, cancel = context.WithTimeout(ctx, DefaultTimeout)
+	case timeout < 0:
+		ctxTimeout = ctx
+	default:
+		ctxTimeout, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	}
-	ctxTimeout, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	return quic.DialAddr(ctxTimeout, addr, common.GenerateClientTLSConfig(), common.QuicConfig)
 }
 
 // StreamReadWithLength reads data with 4-byte length prefix
 func StreamReadWithLength(stream *quic.Stream, timeout int) ([]byte, error) {
-	if timeout > 0 {
+	switch {
+	case timeout == 0:
+		stream.SetReadDeadline(time.Now().Add(DefaultTimeout))
+	case timeout < 0:
+		stream.SetReadDeadline(time.Time{})
+	default:
 		stream.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-	} else {
-		stream.SetReadDeadline(time.Now().Add(time.Duration(5) * time.Second))
 	}
 	defer stream.SetReadDeadline(time.Time{})
 
@@ -93,10 +124,13 @@ func StreamReadWithLength(stream *quic.Stream, timeout int) ([]byte, error) {
 
 // StreamWriteWithLength writes data with 4-byte length prefix
 func StreamWriteWithLength(stream *quic.Stream, data []byte, timeout int) (int, error) {
-	if timeout > 0 {
+	switch {
+	case timeout == 0:
+		stream.SetWriteDeadline(time.Now().Add(DefaultTimeout))
+	case timeout < 0:
+		stream.SetWriteDeadline(time.Time{})
+	default:
 		stream.SetWriteDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-	} else {
-		stream.SetWriteDeadline(time.Now().Add(time.Duration(5) * time.Second))
 	}
 	defer stream.SetWriteDeadline(time.Time{})
 

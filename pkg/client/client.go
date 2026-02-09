@@ -119,7 +119,7 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		}
 		defer p2pConn.CloseWithError(0, "closing P2P connection")
 
-		log.Info("(P2P) P2P connection established")
+		log.Info("(P2P) P2P connection established successfully")
 		for {
 			newStream, err := p2pConn.AcceptStream(ctx)
 			if err != nil {

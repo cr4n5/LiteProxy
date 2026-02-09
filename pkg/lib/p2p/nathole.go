@@ -171,7 +171,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 				nh.resultConn = conn
 				// set no deadline
 				conn.SetReadDeadline(time.Time{})
-				log.Infof("(P2P) Successfully received msg with peer %s via local addr %s", addr.String(), conn.LocalAddr().String())
+				log.Infof("(P2P) Received msg with peer %s via local addr %s", addr.String(), conn.LocalAddr().String())
 				go nh.Send(ctx, conn, addr.String())
 				nh.SendChannel(nil)
 			}
