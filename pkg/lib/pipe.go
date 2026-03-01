@@ -60,7 +60,7 @@ func PipeUDPStream(stream *quic.Stream, udpConn *net.UDPConn) error {
 				errCh <- err
 				return
 			}
-			_, err = StreamWriteWithLength(stream, buf[:n], 0)
+			_, err = StreamWriteWithLength(stream, buf[:n], -1)
 			if err != nil {
 				errCh <- err
 				return

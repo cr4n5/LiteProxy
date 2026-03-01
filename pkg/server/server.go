@@ -120,7 +120,9 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 			if err != nil {
 				return err
 			}
-			go s.handleUDPConnection(ctx, route, bridgeConn, addr, buf[:n], udpSession)
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			go s.handleUDPConnection(ctx, route, bridgeConn, addr, data, udpSession)
 		}
 
 	case "ptcp", "pudp":
@@ -193,7 +195,7 @@ func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConf
 		return
 	}
 	// Use the stream to handle UDP data - use StreamWriteWithLength for proper framing
-	_, err = lib.StreamWriteWithLength(stream, data, 0)
+	_, err = lib.StreamWriteWithLength(stream, data, -1)
 	if err != nil {
 		log.Errorf("(UDP) failed to write UDP data for addr %s to target %s: %v", addr.String(), route.ClientAddr, err)
 		udpSession.DeleteStream(addr)
