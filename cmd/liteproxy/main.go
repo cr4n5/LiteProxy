@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	// "net/http"
+	// _ "net/http/pprof"
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
@@ -11,6 +13,10 @@ import (
 )
 
 func main() {
+	// go func() {
+	// 	http.ListenAndServe("localhost:6060", nil)
+	// }()
+
 	config.ParseArgs()
 	cfg := config.GetConfig()
 	// Initialize logger

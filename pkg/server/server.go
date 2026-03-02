@@ -58,7 +58,10 @@ func (s *Server) Run(ctx context.Context) error {
 		go func(r config.RouteConfig) {
 			err := s.handleRoute(routeContext, conn, r)
 			if err != nil {
-				errChan <- err
+				select {
+				case errChan <- err:
+				default:
+				}
 			}
 		}(route)
 	}
