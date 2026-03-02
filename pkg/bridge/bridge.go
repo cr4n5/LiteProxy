@@ -97,13 +97,14 @@ func (b *Bridge) handleConnection(ctx context.Context, conn *quic.Conn) {
 
 	switch hm.ClientType {
 	case "server":
-		log.Infof("(SERVER) Remote Addr %s: connected", conn.RemoteAddr().String())
+		log.Infof("(SERVER) Remote Addr %s: connected with client ID (%s)", conn.RemoteAddr().String(), hm.ClientID)
 		for {
 			newStream, err := conn.AcceptStream(ctx)
 			if err != nil {
 				log.Errorf("(SERVER) Remote Addr %s: failed to accept server stream: %v", conn.RemoteAddr().String(), err)
 				return
 			}
+			log.Infof("(SERVER) Remote Addr %s: new stream accepted for client ID (%s)", conn.RemoteAddr().String(), hm.ClientID)
 			go b.handleServerStream(ctx, hm, newStream)
 		}
 
@@ -149,9 +150,9 @@ func (b *Bridge) handleServerStream(ctx context.Context, hm *lib.HandshakeMessag
 	// Start piping data between server stream and client stream
 	err = lib.Pipe(stream, clientStream)
 	if err != nil {
-		log.Errorf("(SERVER) stream: piping between server and client ID (%s) ended: %v", hm.ClientID, common.TranslateStreamError(err))
+		log.Debugf("(SERVER) stream: piping between server and client ID (%s) ended: %v", hm.ClientID, common.TranslateStreamError(err))
 		stream.CancelWrite(common.TranslateErrorCode(err))
 		return
 	}
-	log.Infof("(SERVER) stream: piping between server and client ID (%s) ended normally", hm.ClientID)
+	log.Debugf("(SERVER) stream: piping between server and client ID (%s) ended normally", hm.ClientID)
 }

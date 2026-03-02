@@ -77,14 +77,14 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		}
 		defer targetConn.Close()
 
-		log.Infof("(TCP) connected to target %s ", hcm.ClientAddr)
+		log.Infof("(TCP) connected to TCP target %s ", hcm.ClientAddr)
 		// Start piping data between stream and target connection
 		err = lib.Pipe(stream, targetConn)
 		if err != nil {
-			log.Errorf("(TCP) piping between stream and target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
+			log.Debugf("(TCP) piping between stream and target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
 			return
 		}
-		log.Infof("(TCP) piping between stream and target %s ended normally", hcm.ClientAddr)
+		log.Debugf("(TCP) piping between stream and target %s ended normally", hcm.ClientAddr)
 
 	case "udp":
 		udpAddr, err := net.ResolveUDPAddr("udp", hcm.ClientAddr)
@@ -106,10 +106,10 @@ func (c *Client) handleStream(ctx context.Context, stream *quic.Stream) {
 		// Handle UDP with proper length prefix protocol
 		err = lib.PipeUDPStream(stream, udpConn)
 		if err != nil {
-			log.Errorf("(UDP) piping between stream and UDP target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
+			log.Debugf("(UDP) piping between stream and UDP target %s ended: %v", hcm.ClientAddr, common.TranslateStreamError(err))
 			return
 		}
-		log.Infof("(UDP) piping between stream and UDP target %s ended normally", hcm.ClientAddr)
+		log.Debugf("(UDP) piping between stream and UDP target %s ended normally", hcm.ClientAddr)
 
 	case "ptcp", "pudp":
 		p2pConn, err := p2p.EstablishP2PConnection(ctx, *c.cfg, stream)

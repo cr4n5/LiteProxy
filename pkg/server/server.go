@@ -182,10 +182,10 @@ func (s *Server) handleTCPConnection(ctx context.Context, route config.RouteConf
 
 	err = lib.Pipe(stream, conn)
 	if err != nil {
-		log.Errorf("(TCP) pipe between %s and target %s ended: %v", conn.RemoteAddr(), route.ClientAddr, common.TranslateStreamError(err))
+		log.Debugf("(TCP) pipe between %s and target %s ended: %v", conn.RemoteAddr(), route.ClientAddr, common.TranslateStreamError(err))
 		return
 	}
-	log.Infof("(TCP) pipe between %s and target %s ended normally", conn.RemoteAddr(), route.ClientAddr)
+	log.Debugf("(TCP) pipe between %s and target %s ended normally", conn.RemoteAddr(), route.ClientAddr)
 }
 
 func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConfig, bridgeConn *quic.Conn, addr net.Addr, data []byte, udpSession *lib.UDPSession) {
@@ -197,7 +197,7 @@ func (s *Server) handleUDPConnection(ctx context.Context, route config.RouteConf
 	// Use the stream to handle UDP data - use StreamWriteWithLength for proper framing
 	_, err = lib.StreamWriteWithLength(stream, data, -1)
 	if err != nil {
-		log.Errorf("(UDP) failed to write UDP data for addr %s to target %s: %v", addr.String(), route.ClientAddr, err)
+		log.Debugf("(UDP) failed to write UDP data for addr %s to target %s: %v", addr.String(), route.ClientAddr, err)
 		udpSession.DeleteStream(addr)
 		return
 	}
