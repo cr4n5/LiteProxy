@@ -138,7 +138,6 @@ func (nh *NatHole) Send(ctx context.Context, conn *net.UDPConn, peerAddr string)
 func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 	log.Debugf("(P2P) Listen started on local addr %s", conn.LocalAddr().String())
 	buf := make([]byte, 65535)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer func() {
 		if conn != nh.resultConn {
 			conn.Close()
@@ -154,6 +153,7 @@ func (nh *NatHole) Listen(ctx context.Context, conn *net.UDPConn) {
 				return
 			}
 
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			_, addr, err := conn.ReadFromUDP(buf)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok {
