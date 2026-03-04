@@ -21,28 +21,31 @@ type RouteConfig struct {
 }
 
 type Config struct {
-	Mode       string
-	LogLevel   string
-	BridgeAddr string
-	AccessKey  string
-	ClientID   string
-	Routes     []RouteConfig // route configuration list
-	StunServer string
+	Mode         string
+	LogLevel     string
+	BridgeAddr   string
+	AccessKey    string
+	ClientID     string
+	Routes       []RouteConfig // route configuration list
+	StunServer   string
+	PprofEnabled bool
 }
 
 var config *Config
 
-func registerCommonFlags(fs *flag.FlagSet) (*string, *string, *string) {
+func registerCommonFlags(fs *flag.FlagSet) (*string, *string, *string, *bool) {
 	accessKey := fs.String("K", "", "access key for authentication")
 	bridgeAddr := fs.String("A", "127.0.0.1:10020", "bridge control address")
 	logLevel := fs.String("log", "info", "logging level (trace, debug, info, warn, error)")
-	return accessKey, bridgeAddr, logLevel
+	pprofFlag := fs.Bool("pprof", false, "enable pprof profiling")
+	return accessKey, bridgeAddr, logLevel, pprofFlag
 }
 
-func applyCommonConfig(accessKey, bridgeAddr, logLevel string) {
+func applyCommonConfig(accessKey, bridgeAddr, logLevel string, pprofEnabled bool) {
 	config.AccessKey = accessKey
 	config.BridgeAddr = bridgeAddr
 	config.LogLevel = logLevel
+	config.PprofEnabled = pprofEnabled
 }
 
 // parseRoute  -R ：PROTOCOL://LOCAL_IP:LOCAL_PORT@CLIENT_LOCAL_HOST:CLIENT_LOCAL_PORT
@@ -143,7 +146,7 @@ func ParseArgs() {
 		config.Mode = "bridge"
 
 		bridgeCmd := flag.NewFlagSet("bridge", flag.ExitOnError)
-		accessKey, bridgeAddr, logLevel := registerCommonFlags(bridgeCmd)
+		accessKey, bridgeAddr, logLevel, pprofFlag := registerCommonFlags(bridgeCmd)
 
 		bridgeCmd.Usage = func() {
 			fmt.Println("Usage: liteproxy bridge [flags]")
@@ -151,13 +154,13 @@ func ParseArgs() {
 		}
 
 		bridgeCmd.Parse(os.Args[2:])
-		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
+		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel, *pprofFlag)
 
 	case "server":
 		config.Mode = "server"
 
 		serverCmd := flag.NewFlagSet("server", flag.ExitOnError)
-		accessKey, bridgeAddr, logLevel := registerCommonFlags(serverCmd)
+		accessKey, bridgeAddr, logLevel, pprofFlag := registerCommonFlags(serverCmd)
 		clientID := serverCmd.String("id", "client1", "target client ID")
 		stunServer := serverCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
 		// Support multiple -R flags
@@ -182,7 +185,7 @@ func ParseArgs() {
 		}
 
 		serverCmd.Parse(os.Args[2:])
-		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
+		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel, *pprofFlag)
 		config.ClientID = *clientID
 		config.StunServer = *stunServer
 		config.Routes = make([]RouteConfig, 0)
@@ -205,7 +208,7 @@ func ParseArgs() {
 		config.Mode = "client"
 
 		clientCmd := flag.NewFlagSet("client", flag.ExitOnError)
-		accessKey, bridgeAddr, logLevel := registerCommonFlags(clientCmd)
+		accessKey, bridgeAddr, logLevel, pprofFlag := registerCommonFlags(clientCmd)
 		clientID := clientCmd.String("id", "client1", "client identifier")
 		stunServer := clientCmd.String("stun", "stun.easyvoip.com:3478", "STUN server address")
 
@@ -215,7 +218,7 @@ func ParseArgs() {
 		}
 
 		clientCmd.Parse(os.Args[2:])
-		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel)
+		applyCommonConfig(*accessKey, *bridgeAddr, *logLevel, *pprofFlag)
 		config.ClientID = *clientID
 		config.StunServer = *stunServer
 

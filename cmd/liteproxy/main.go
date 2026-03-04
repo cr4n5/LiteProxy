@@ -2,25 +2,30 @@ package main
 
 import (
 	"context"
-	// "net/http"
-	// _ "net/http/pprof"
+	"net/http"
+	_ "net/http/pprof"
 
 	"github.com/cr4n5/liteproxy/common"
 	"github.com/cr4n5/liteproxy/config"
 	"github.com/cr4n5/liteproxy/pkg/bridge"
 	"github.com/cr4n5/liteproxy/pkg/client"
 	"github.com/cr4n5/liteproxy/pkg/server"
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	// go func() {
-	// 	http.ListenAndServe("localhost:6060", nil)
-	// }()
-
 	config.ParseArgs()
 	cfg := config.GetConfig()
+
 	// Initialize logger
 	common.LogInit(cfg.LogLevel)
+
+	if cfg.PprofEnabled {
+		go func() {
+			log.Info("pprof server started on localhost:6060")
+			http.ListenAndServe("localhost:6060", nil)
+		}()
+	}
 
 	ctx := context.Background()
 
