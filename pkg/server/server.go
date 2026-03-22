@@ -146,7 +146,7 @@ func (s *Server) handleRoute(ctx context.Context, bridgeConn *quic.Conn, route c
 				log.Errorf("(P2P) failed to establish P2P connection: %v", err)
 				return
 			}
-			log.Infof("(P2P) P2P connection established successfully`")
+			log.Infof("(P2P) P2P connection established successfully")
 
 			s.p2pconn = p2pConn
 			// go routine to close the P2P connection when context is done

@@ -224,7 +224,7 @@ func ParseArgs() {
 
 	default:
 		fmt.Println("Unknown command:", cmd)
-		fmt.Println("Available commands: bridge, server, client")
+		fmt.Println("Available commands: bridge, server, client, version")
 		os.Exit(1)
 	}
 

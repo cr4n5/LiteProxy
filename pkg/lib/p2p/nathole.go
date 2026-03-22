@@ -72,19 +72,7 @@ func (nh *NatHole) MakeNatHole(p2pctx context.Context) {
 			if nh.IsResultReady() {
 				return
 			}
-			log.Infof("(P2P) Mode0 timeout, proceeding to Mode1")
-		}
-		go nh.MakeMode1Hole(p2pctx)
-
-		select {
-		case <-p2pctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-			// timeout
-			if nh.IsResultReady() {
-				return
-			}
-			log.Infof("(P2P) Mode1 timeout, proceeding to Mode2")
+			log.Infof("(P2P) Mode0 timeout, proceeding to Mode2")
 		}
 		go nh.MakeMode2Hole(p2pctx)
 
